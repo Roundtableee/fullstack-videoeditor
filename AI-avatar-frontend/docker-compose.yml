@@ -1,0 +1,9 @@
+
+services:
+  frontend:
+    build: ./bn-platform-ai-avatar-frontend-c
+    container_name: front_page
+    ports:
+      - "3000:3000"
+    env_file: '.env.local'
+    command: npm start

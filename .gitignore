@@ -205,4 +205,4 @@ access.log
 application.log
 
 # Nested git repositories (if not using submodules)
-AI-avatar-frontend/
+# AI-avatar-frontend/ - Commented out to include frontend in main repo
