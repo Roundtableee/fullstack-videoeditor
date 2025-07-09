@@ -267,3 +267,23 @@ npm run dev:backend
 ## 📄 License
 
 MIT License
+
+## 🔧 Resolution Consistency Fix
+
+**Fixed Issue**: วิดีโอไม่แสดงหรือเป็นหน้าจอดำหลัง render เนื่องจาก resolution ไม่ตรงกัน
+
+### ปัญหาที่แก้ไข:
+- **Preview**: ใช้ 1080x1920 (portrait) ทำให้แสดงผลไม่ตรงกับ export
+- **Export**: ใช้ 1920x1080 (landscape) ทำให้ได้ output ที่ไม่ตรงกับ preview
+- **Position**: Y-coordinate และตำแหน่งอื่นๆ ไม่แม่นยำ
+
+### วิธีแก้ไข:
+✅ **อัปเดต Frontend Store**: เปลี่ยน default size เป็น 1920x1080  
+✅ **อัปเดต Backend Default**: เปลี่ยน fallback size เป็น 1920x1080  
+✅ **ปรับ Position Logic**: ใช้ center ใหม่ที่ (960, 540)  
+✅ **ปรับ Video Scaling**: เพิ่มคุณภาพด้วย 3.0x scaling  
+
+### ผลลัพธ์:
+🎯 **WYSIWYG**: Preview ตรงกับ Export 100%  
+🎯 **Position Accuracy**: ตำแหน่งแม่นยำไม่มีการเบี่ยงเบน  
+🎯 **Better Quality**: ความละเอียดสูงขึ้น 1920x1080

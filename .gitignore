@@ -206,3 +206,15 @@ application.log
 
 # Nested git repositories (if not using submodules)
 # AI-avatar-frontend/ - Commented out to include frontend in main repo
+
+# Test and debugging files
+test-*.js
+debug-*.js
+*.test.js
+*.spec.js
+
+# Documentation and markdown files
+*.md
+*.MD
+!README.md
+!LICENSE.md

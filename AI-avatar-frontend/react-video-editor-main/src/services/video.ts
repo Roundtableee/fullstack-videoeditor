@@ -80,17 +80,14 @@ export class VideoRenderService {
     }
 
     // 2️⃣ Send payload to backend
-    // Add position data to track items from editor preview positions
+    // Since we now use consistent 1920x1080 resolution, position mapping should be 1:1
     const enhancedTrackItems = design.trackItems.map((item) => {
-      // For video items, get position from details or use default
-      if (item.type === 'video' && item.details) {
-        // Check if position already exists in display
+      if ((item.type === 'video' || item.type === 'image' || item.type === 'text') && item.details) {
         const currentDisplay = item.display as any;
-        
+
         // Helper function to clean position values
         const cleanPositionValue = (value: any): number => {
           if (typeof value === 'string') {
-            // Remove 'px', '%', or any other units and extract the number
             const numMatch = value.match(/-?\d+\.?\d*/);
             return numMatch ? parseFloat(numMatch[0]) : 0;
           } else if (typeof value === 'number') {
@@ -98,77 +95,129 @@ export class VideoRenderService {
           }
           return 0;
         };
-        
-        // Try to get position from item details (where editor stores position)
-        const editorX = cleanPositionValue(item.details.left || item.details.x || 0);
-        const editorY = cleanPositionValue(item.details.top || item.details.y || 0);
-        
-        // If we don't have position in display but have it in details, add it
-        if (!currentDisplay.position && (editorX !== 0 || editorY !== 0 || item.details.left !== undefined || item.details.top !== undefined)) {
-          const position = {
-            x: Math.round(editorX), // Ensure integer values
-            y: Math.round(editorY)
-          };
+
+        // With consistent 1920x1080 resolution, positions should map directly
+        // No complex scaling needed since preview and output use same resolution
+        console.log(`📐 Using 1:1 position mapping for ${item.type} ${item.id}`);
+
+        // Get output video dimensions
+        const outputWidth = options.size.width;
+        const outputHeight = options.size.height;
+
+        // Since we now use consistent 1920x1080 resolution for both preview and output,
+        // we use 1:1 mapping without complex scaling
+        const previewWidth = outputWidth;   // Same resolution for preview and output
+        const previewHeight = outputHeight; // Same resolution for preview and output
+
+        // Extract editor-provided position values
+        const previewX = cleanPositionValue(item.details.left ?? item.details.x ?? 0);
+        const previewY = cleanPositionValue(item.details.top ?? item.details.y ?? 0);
+
+        // Calculate scaling factors (should be 1:1 with consistent resolution)
+        const scaleX = outputWidth / previewWidth;   // Should be 1.0
+        const scaleY = outputHeight / previewHeight; // Should be 1.0
+
+        // Scale coordinates from preview to output resolution using exact video dimensions
+        // This ensures positions match exactly between preview and final video
+        const scaledX = Math.round(previewX * scaleX);
+        const scaledY = Math.round(previewY * scaleY);
+
+        // Also scale dimensions if available for proper cropping
+        let scaledWidth, scaledHeight, originalWidth, originalHeight;
+        if (item.details.width !== undefined && item.details.height !== undefined) {
+          const previewW = cleanPositionValue(item.details.width);
+          const previewH = cleanPositionValue(item.details.height);
           
-          console.log(`🎯 Using editor position for video ${item.id}: x=${position.x}, y=${position.y}`);
+          // Store original dimensions for cropping calculations
+          originalWidth = previewW;
+          originalHeight = previewH;
           
-          return {
-            ...item,
-            display: {
-              ...item.display,
-              position
-            } as any
-          };
+          // Scale to output dimensions
+          scaledWidth = Math.round(previewW * scaleX);
+          scaledHeight = Math.round(previewH * scaleY);
+          
+          console.log(`📏 ${item.type} ${item.id}: Dimensions - preview: ${previewW}x${previewH} → output: ${scaledWidth}x${scaledHeight}`);
         }
-        
-        // If position already exists, clean it
-        if (currentDisplay.position) {
-          const cleanedPosition = {
-            x: Math.round(cleanPositionValue(currentDisplay.position.x)),
-            y: Math.round(cleanPositionValue(currentDisplay.position.y))
+
+        // Prioritize editor details for positioning if available
+        if (item.details.left !== undefined || item.details.top !== undefined || item.details.x !== undefined || item.details.y !== undefined) {
+          const position = { x: scaledX, y: scaledY };
+          
+          // Create enhanced item with position and scaled dimensions
+          const enhancedItem = { 
+            ...item, 
+            display: { ...item.display, position } as any
           };
           
-          console.log(`📍 Cleaned existing position for video ${item.id}: x=${cleanedPosition.x}, y=${cleanedPosition.y}`);
+          // Add scaled dimensions and original dimensions to details for backend processing
+          if (scaledWidth !== undefined && scaledHeight !== undefined) {
+            enhancedItem.details = {
+              ...enhancedItem.details,
+              scaledWidth,
+              scaledHeight,
+              originalWidth,
+              originalHeight,
+              // Add cropping information for images that are larger than the preview
+              shouldCrop: item.type === 'image' && (originalWidth > scaledWidth || originalHeight > scaledHeight)
+            };
+          }
           
-          return {
-            ...item,
-            display: {
-              ...item.display,
-              position: cleanedPosition
-            } as any
+          console.log(`🎯 Using editor details for position on ${item.type} ${item.id}:`);
+          console.log(`   Preview: (${previewX}, ${previewY}) → Output: (${scaledX}, ${scaledY})`);
+          console.log(`   Preview size: ${previewWidth}x${previewHeight} → Output size: ${outputWidth}x${outputHeight}`);
+          console.log(`   Scale factors: ${scaleX.toFixed(3)} x ${scaleY.toFixed(3)}`);
+          if (scaledWidth !== undefined) {
+            console.log(`   Dimensions: (${originalWidth}, ${originalHeight}) → (${scaledWidth}, ${scaledHeight})`);
+            console.log(`   Should crop: ${enhancedItem.details.shouldCrop}`);
+          }
+          
+          return enhancedItem;
+        } else if (currentDisplay.position) {
+          // Scale existing position in display
+          const previewPosX = cleanPositionValue(currentDisplay.position.x);
+          const previewPosY = cleanPositionValue(currentDisplay.position.y);
+          const scaledPosition = { 
+            x: Math.round(previewPosX * scaleX), 
+            y: Math.round(previewPosY * scaleY) 
           };
+          console.log(`📍 Scaled existing display.position for ${item.type} ${item.id}:`);
+          console.log(`   Preview: (${previewPosX}, ${previewPosY}) → Output: (${scaledPosition.x}, ${scaledPosition.y})`);
+          console.log(`   Scale factors: ${scaleX.toFixed(3)} x ${scaleY.toFixed(3)}`);
+          return { ...item, display: { ...item.display, position: scaledPosition } as any };
         }
-        
-        // Default position for main video (no position specified)
-        console.log(`🎬 Using default center position for video ${item.id}`);
-        return {
-          ...item,
-          display: {
-            ...item.display,
-            position: { x: 0, y: 0 }
-          } as any
-        };
+
+        // Default position if no editor or display values
+        const defaultPosition = { x: 0, y: 0 };
+        console.log(`🎬 Using default position for ${item.type} ${item.id}: x=${defaultPosition.x}, y=${defaultPosition.y}`);
+        return { ...item, display: { ...item.display, position: defaultPosition } as any };
       }
       return item;
     });
 
     console.log('🔧 ENHANCED TRACK ITEMS WITH EDITOR POSITIONS:');
-    enhancedTrackItems.filter(item => item.type === 'video').forEach((video, index) => {
-      const display = video.display as any;
-      console.log(`  Enhanced Video ${index}:`, {
-        id: video.id,
-        type: video.type,
-        src: video.details?.src,
+    enhancedTrackItems.filter(item => item.type === 'video' || item.type === 'image' || item.type === 'text').forEach((media, index) => {
+      const display = media.display as any;
+      console.log(`  Enhanced ${media.type} ${index}:`, {
+        id: media.id,
+        type: media.type,
+        src: media.details?.src,
         editorPosition: {
-          left: video.details?.left,
-          top: video.details?.top,
-          x: video.details?.x,
-          y: video.details?.y,
-          width: video.details?.width,
-          height: video.details?.height,
-          scale: video.details?.scale
+          left: media.details?.left,
+          top: media.details?.top,
+          x: media.details?.x,
+          y: media.details?.y,
+          width: media.details?.width,
+          height: media.details?.height,
+          scale: media.details?.scale
         },
-        display: video.display,
+        scaledDimensions: {
+          scaledWidth: media.details?.scaledWidth,
+          scaledHeight: media.details?.scaledHeight,
+          originalWidth: media.details?.originalWidth,
+          originalHeight: media.details?.originalHeight,
+          shouldCrop: media.details?.shouldCrop
+        },
+        display: media.display,
         finalPosition: display.position
       });
     });

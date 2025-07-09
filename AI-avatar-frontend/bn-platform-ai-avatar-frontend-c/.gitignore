@@ -37,3 +37,15 @@ yarn-error.log*
 next-env.d.ts
 
 requirements.md
+
+# Test and debugging files
+test-*.js
+debug-*.js
+*.test.js
+*.spec.js
+
+# Documentation and markdown files
+*.md
+*.MD
+!README.md
+!LICENSE.md

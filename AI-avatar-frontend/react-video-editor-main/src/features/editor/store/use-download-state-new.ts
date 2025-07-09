@@ -49,7 +49,9 @@ const getTimelineData = () => {
   return {
     trackItems,
     transitions,
-    size: size || { width: 1920, height: 1080 },
+    // Use store size or fallback to same resolution for consistency
+    // This ensures preview composition and export output have identical resolution
+    size: size || { width: 1920, height: 1080 }, // Must match store default
     duration: duration || 5000,
     fps: fps || 30
   };

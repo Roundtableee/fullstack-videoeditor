@@ -37,9 +37,11 @@ interface ITimelineStore {
 }
 
 const useStore = create<ITimelineStore>((set) => ({
+  // Default video composition size - must match export fallback size for consistency
+  // This ensures preview and output have the same resolution and aspect ratio
   size: {
-    width: 1080,
-    height: 1920,
+    width: 1920,  // Full HD width
+    height: 1080, // Full HD height (16:9 aspect ratio)
   },
 
   timeline: null,

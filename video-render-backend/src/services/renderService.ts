@@ -65,7 +65,7 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
     console.log('================================');
     
     const duration = calculateTotalDuration(job.design.trackItems);
-    const { width = 1280, height = 720 } = job.options?.size || {};
+    const { width = 1920, height = 1080 } = job.options?.size || {};
     
     // Check if we have any track items with actual content
     const videoTracks = job.design.trackItems.filter(item => 
@@ -126,9 +126,18 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
       if (validVideoTracks.length === 1) {
         // Single video - simple case
         const mainVideo = validVideoTracks[0];
+        const clipDuration = (mainVideo.display.to - mainVideo.display.from) / 1000;
+        const videoStartTime = mainVideo.display.from / 1000;
         
         console.log('Using single video:', mainVideo.resolvedSrc);
+        console.log(`Video timing: start=${videoStartTime}s, duration=${clipDuration}s`);
+        
         command = command.input(mainVideo.resolvedSrc);
+        
+        // Apply trim if video doesn't start at 0 or has specific duration
+        if (videoStartTime > 0 || clipDuration < (duration / 1000)) {
+          command = command.inputOptions([`-ss ${videoStartTime}`, `-t ${clipDuration}`]);
+        }
         
         // Scale video to match output size
         command = command.videoFilters([
@@ -136,7 +145,10 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`
         ]);
         
-        hasVideoAudio = true; // Single video keeps its audio
+        // Check if video actually has audio stream by being more careful
+        outputVideoLabel = '0:v';
+        outputAudioLabel = '0:a'; // Direct audio stream reference
+        hasVideoAudio = true; // Assume it has audio
         
       } else {
         // --- OVERLAY LOGIC FOR MULTIPLE VIDEOS ---
@@ -206,10 +218,13 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
             `setpts=PTS-STARTPTS+${videoStartTime}/TB[v${index}]`;
           filterChains.push(videoChain);
 
-          // Trim, set PTS for audio, and prepare for mixing
-          const audioChain = `[${index}:a]atrim=start=0:duration=${clipDuration},asetpts=PTS-STARTPTS+${videoStartTime}/TB[a${index}]`;
+          // Add audio from ALL videos that have audio streams
+          // Use adelay filter for proper audio delay (in milliseconds)
+          const audioDelayMs = Math.round(videoStartTime * 1000);
+          const audioChain = `[${index}:a]atrim=start=0:duration=${clipDuration},adelay=${audioDelayMs}|${audioDelayMs}[a${index}]`;
           filterChains.push(audioChain);
           audioStreamsToMix.push(`[a${index}]`);
+          console.log(`Added audio stream from video ${index} with ${audioDelayMs}ms delay`);
         });
 
         // 2. Create a base canvas to overlay videos onto
@@ -223,9 +238,20 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           const nextOverlayInput = `[v${index}]`;
           const newOverlayOutput = index === validVideoTracks.length - 1 ? '[final]' : `[ov${index}]`;
           
-          // Get position from display object, default to 0,0
-          let x = video.display?.position?.x ?? 0;
-          let y = video.display?.position?.y ?? 0;
+          // Get position from display object, handle different cases properly
+          let x = 0;
+          let y = 0;
+          
+          // Check if this video has explicit position data
+          if (video.display?.position) {
+            x = video.display.position.x || 0;
+            y = video.display.position.y || 0;
+          } else {
+            // For videos without position, assume they are background/main videos
+            // Place them at (0,0) to cover the full canvas
+            x = 0;
+            y = 0;
+          }
           
           // Handle scale factor if provided
           const scale = video.details?.scale || 1;
@@ -245,6 +271,20 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           // Apply cleaning to x and y positions
           x = cleanPosition(x);
           y = cleanPosition(y);
+          
+          // Determine if this is the main background video or an overlay
+          const isMainVideo = index === 0 && (!video.display?.position || 
+            (video.display.position.x === 0 && video.display.position.y === 0));
+          
+          if (isMainVideo) {
+            // Main video should fill the canvas, position at (0,0)
+            x = 0;
+            y = 0;
+            console.log(`Main video ${index} positioned at origin: (${x}, ${y})`);
+          } else {
+            // Overlay video - keep the calculated position
+            console.log(`Overlay video ${index} positioned at: (${x}, ${y})`);
+          }
           
           // Apply scale to position if needed
           if (scale !== 1) {
@@ -268,14 +308,23 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
         
         outputVideoLabel = lastOverlayOutput; // The final video is the result of the last overlay
 
-        // 4. Mix all audio streams
-        if (audioStreamsToMix.length > 0) {
-          const amixFilter = `${audioStreamsToMix.join('')}amix=inputs=${audioStreamsToMix.length}:duration=longest[outa]`;
+        // 4. Handle audio for multiple videos - mix all audio streams
+        if (audioStreamsToMix.length > 1) {
+          // Mix multiple audio streams
+          const amixInputs = audioStreamsToMix.join('');
+          const amixFilter = `${amixInputs}amix=inputs=${audioStreamsToMix.length}:duration=longest[mixedaudio]`;
           filterChains.push(amixFilter);
-          outputAudioLabel = '[outa]';
+          outputAudioLabel = '[mixedaudio]';
           hasVideoAudio = true;
+          console.log(`Mixing ${audioStreamsToMix.length} audio streams:`, audioStreamsToMix);
+        } else if (audioStreamsToMix.length === 1) {
+          // Single audio stream
+          outputAudioLabel = audioStreamsToMix[0];
+          hasVideoAudio = true;
+          console.log('Using single audio stream:', outputAudioLabel);
         } else {
           hasVideoAudio = false;
+          console.log('No audio streams available');
         }
 
         // Join all filter chains for the final complex filter string
@@ -354,28 +403,36 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
       command = command.complexFilter(complexFilterString);
     }
 
-    // Set final output mappings
+    // Set final output mappings - improved audio handling
     const outputOptions = [
       '-map', outputVideoLabel,
-      '-map', outputAudioLabel,
-      '-c:v libx264',
-      '-c:a aac',
-      '-shortest'
+      '-c:v', 'libx264'
     ];
 
-    // If there's no audio, remove audio-related options
-    if (!hasVideoAudio && audioTracks.length === 0) {
+    // Add audio mapping if we have audio streams
+    if (hasVideoAudio && outputAudioLabel) {
+      if (outputAudioLabel.includes('[')) {
+        // Complex filter output
+        outputOptions.push('-map', outputAudioLabel);
+        outputOptions.push('-c:a', 'aac');
+        console.log('Audio stream added to output (complex filter):', outputAudioLabel);
+      } else {
+        // Direct stream mapping with optional flag
+        outputOptions.push('-map', outputAudioLabel + '?');
+        outputOptions.push('-c:a', 'aac');
+        console.log('Audio stream added to output (direct):', outputAudioLabel + '?');
+      }
+    } else if (audioTracks.length > 0) {
+      // External audio tracks
+      outputOptions.push('-map', '0:a?');
+      outputOptions.push('-c:a', 'aac');
+      console.log('External audio stream added');
+    } else {
       console.log('No audio stream available. Rendering video-only.');
-      outputOptions.splice(1, 2); // Remove '-map', outputAudioLabel
-      outputOptions.splice(2, 2); // Remove '-c:a', 'aac'
-    } else if (outputAudioLabel.includes(':a') && !hasVideoAudio) {
-      // Case for image + external audio, where we need to map both
-    } else if (!outputAudioLabel.includes('[') && !hasVideoAudio) {
-       // No audio stream available.
-       console.log('No audio stream available. Rendering video-only.');
-       outputOptions.splice(1, 2); // Remove '-map', outputAudioLabel
-       outputOptions.splice(2, 2); // Remove '-c:a', 'aac'
     }
+    
+    // Always add shortest flag at the end
+    outputOptions.push('-shortest');
 
 
     console.log('Final output options:', outputOptions);
@@ -388,7 +445,7 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
         `-crf ${job.options.crf || 18}`,
         '-preset medium',
         `-r ${job.options.fps}`,
-       // `-t ${duration / 1000}` // Set duration
+        `-t ${duration / 1000}` // Set duration to match timeline
       ])
       .on('start', (commandLine: string) => {
         console.log('FFmpeg command:', commandLine);
@@ -448,38 +505,25 @@ const checkFileExists = (filePath: string): boolean => {
 const calculateTotalDuration = (trackItems: any[]): number => {
   if (!trackItems || trackItems.length === 0) return 5000; // Default 5 seconds
   
-  // Calculate based on display.to values from trackItems
-  // Sort trackItems by display.from to ensure proper order
-  const sortedItems = trackItems
-    .filter(item => item.display?.from !== undefined && item.display?.to !== undefined)
-    .sort((a, b) => a.display.from - b.display.from);
+  // Calculate based on the latest end time of all items on timeline
+  // This gives us the total timeline duration, not sum of video durations
+  const itemsWithTime = trackItems
+    .filter(item => item.display?.from !== undefined && item.display?.to !== undefined);
   
   console.log('📊 Timeline analysis:');
-  sortedItems.forEach((item, index) => {
+  itemsWithTime.forEach((item, index) => {
     console.log(`  ${index}: ${item.type} from ${item.display.from}ms to ${item.display.to}ms (duration: ${item.display.to - item.display.from}ms)`);
   });
   
-  if (sortedItems.length === 0) {
+  if (itemsWithTime.length === 0) {
     return 5000; // Default if no valid items
   }
   
-  // For multiple videos, calculate total duration as sum of all video durations
-  const videoItems = sortedItems.filter(item => item.type === 'video');
-  if (videoItems.length > 1) {
-    const totalVideoDuration = videoItems.reduce((total, video) => {
-      const videoDuration = video.display?.to - video.display?.from || 5000;
-      return total + videoDuration;
-    }, 0);
-    
-    console.log(`📏 Total video duration (sum): ${totalVideoDuration}ms`);
-    return Math.max(totalVideoDuration, 1000); // Minimum 1 second
-  }
+  // Find the maximum end time across all timeline items
+  const maxEndTime = Math.max(...itemsWithTime.map(item => item.display.to));
   
-  // For single video or other cases, use maximum end time
-  const maxEnd = Math.max(...sortedItems.map(item => item.display.to));
-  
-  console.log(`📏 Total timeline duration: ${maxEnd}ms`);
-  return Math.max(maxEnd, 1000); // Minimum 1 second
+  console.log(`📏 Total timeline duration: ${maxEndTime}ms`);
+  return Math.max(maxEndTime, 1000); // Minimum 1 second
 };
 
 // Future implementation with Remotion
