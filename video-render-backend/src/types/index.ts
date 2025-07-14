@@ -24,10 +24,23 @@ export interface ITrackItem {
     scale?: number;
     rotation?: number;
     opacity?: number;
+    // Text properties
     text?: string;
     fontSize?: number;
     fontFamily?: string;
+    fontUrl?: string;
     color?: string;
+    backgroundColor?: string;
+    textAlign?: string;
+    borderWidth?: number;
+    borderColor?: string;
+    // Image crop properties
+    crop?: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    };
     [key: string]: any;
   };
   animations?: {

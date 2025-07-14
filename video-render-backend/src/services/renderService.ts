@@ -65,7 +65,10 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
     console.log('================================');
     
     const duration = calculateTotalDuration(job.design.trackItems);
-    const { width = 1920, height = 1080 } = job.options?.size || {};
+    const { width, height } = job.options?.size;
+    if (!width || !height) {
+      throw new Error('options.size (width/height) is required and must be set by frontend');
+    }
     
     // Check if we have any track items with actual content
     const videoTracks = job.design.trackItems.filter(item => 
@@ -77,11 +80,15 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
     const imageTracks = job.design.trackItems.filter(item => 
       item.type === 'image' && item.details?.src
     );
+    const textTracks = job.design.trackItems.filter(item => 
+      item.type === 'text' && item.details?.text
+    );
     
     console.log('Track summary:', {
       videoTracks: videoTracks.length,
       audioTracks: audioTracks.length,
       imageTracks: imageTracks.length,
+      textTracks: textTracks.length,
       totalDuration: duration
     });
     
@@ -92,9 +99,9 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
     let validVideoTracks: any[] = [];
     let hasVideoAudio = false; // To track if the video stream has audio
 
-    // If we have video tracks, handle multiple videos
+    // If we have video tracks, handle videos and images together
     if (videoTracks.length > 0) {
-      console.log('Processing multiple video tracks:', videoTracks.length);
+      console.log(`Processing ${videoTracks.length} video tracks and ${imageTracks.length} image tracks...`);
       
       // Sort video tracks by display.from to ensure correct order
       const sortedVideoTracks = [...videoTracks].sort((a, b) => {
@@ -123,36 +130,55 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
         throw new Error('No valid video files found');
       }
       
-      if (validVideoTracks.length === 1) {
-        // Single video - simple case
+      // Always process image overlays if any images exist
+      let overlayImageTracks: any[] = [];
+      if (imageTracks.length > 0) {
+        console.log(`Checking ${imageTracks.length} image tracks for overlays...`);
+        const sortedImageTracks = [...imageTracks].sort((a, b) => {
+          const fromA = a.display?.from || 0;
+          const fromB = b.display?.from || 0;
+          return fromA - fromB;
+        });
+        for (const image of sortedImageTracks) {
+          const imageSrc = resolveMediaPath(image.details?.src || '');
+          if (checkFileExists(imageSrc)) {
+            overlayImageTracks.push({ ...image, resolvedSrc: imageSrc });
+            console.log(`✓ Valid image file for overlay: ${imageSrc}`);
+          } else {
+            console.warn(`✗ Missing image file: ${imageSrc}`);
+          }
+        }
+      }
+      
+      if (validVideoTracks.length === 1 && overlayImageTracks.length === 0 && textTracks.length === 0) {
+        // Single video only WITHOUT text overlays - simple case
         const mainVideo = validVideoTracks[0];
         const clipDuration = (mainVideo.display.to - mainVideo.display.from) / 1000;
         const videoStartTime = mainVideo.display.from / 1000;
         
-        console.log('Using single video:', mainVideo.resolvedSrc);
-        console.log(`Video timing: start=${videoStartTime}s, duration=${clipDuration}s`);
+        console.log('Using single video only (no images, no text):', mainVideo.resolvedSrc);
         
         command = command.input(mainVideo.resolvedSrc);
         
-        // Apply trim if video doesn't start at 0 or has specific duration
-        if (videoStartTime > 0 || clipDuration < (duration / 1000)) {
-          command = command.inputOptions([`-ss ${videoStartTime}`, `-t ${clipDuration}`]);
-        }
+        // For a single video, it should always fill the canvas.
+        const videoWidth = width % 2 === 0 ? width : width + 1;
+        const videoHeight = height % 2 === 0 ? height : height + 1;
         
-        // Scale video to match output size
+        console.log(`Single video forced to full canvas size: ${videoWidth}x${videoHeight}`);
+
+        // Scale video to match output size - ไม่ขยายขึ้น
         command = command.videoFilters([
-          `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
-          `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`
+          `scale=w='min(iw,${videoWidth})':h='min(ih,${videoHeight})':force_original_aspect_ratio=decrease`,
+          `pad=${videoWidth}:${videoHeight}:(ow-iw)/2:(oh-ih)/2:black`
         ]);
         
-        // Check if video actually has audio stream by being more careful
         outputVideoLabel = '0:v';
-        outputAudioLabel = '0:a'; // Direct audio stream reference
         hasVideoAudio = true; // Assume it has audio
         
       } else {
-        // --- OVERLAY LOGIC FOR MULTIPLE VIDEOS ---
-        console.log(`Overlaying ${validVideoTracks.length} videos...`);
+        // Single video + images OR multiple videos OR text overlays - use filter_complex
+        console.log(`🎬 Complex filtering: ${validVideoTracks.length} videos + ${overlayImageTracks.length} images + ${textTracks.length} text overlays`);
+        console.log('Using complex filter to ensure text overlays work properly');
 
         // Add all video inputs
         validVideoTracks.forEach((video) => {
@@ -170,49 +196,69 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
 
           console.log(`Video ${index}: start=${videoStartTime}s, duration=${clipDuration}s`);
 
-          // Helper function to clean dimension values
+          // Helper function to clean dimension values and ensure even numbers (H.264 requirement)
           const cleanDimension = (value: any, fallback: number): number => {
+            let result;
             if (typeof value === 'string') {
               // Remove 'px' suffix and other units, extract number
               const numMatch = value.match(/\d+\.?\d*/);
-              return numMatch ? parseInt(numMatch[0]) : fallback;
+              result = numMatch ? parseInt(numMatch[0]) : fallback;
             } else if (typeof value === 'number') {
-              return Math.round(value);
+              result = Math.round(value);
+            } else {
+              result = fallback;
             }
-            return fallback;
+            
+            // Ensure the dimension is even (required for H.264)
+            return result % 2 === 0 ? result : result + 1;
           };
 
-          // Get video dimensions from details or use default scaling
-          let videoWidth = cleanDimension(video.details?.width, width);
-          let videoHeight = cleanDimension(video.details?.height, height);
+          // Get video dimensions - main video uses full canvas, overlays use details
+          let videoWidth, videoHeight;
           
-          // If video has position data, it's likely a positioned element (not main background)
-          const hasPosition = video.display?.position && 
-            (video.display.position.x !== 0 || video.display.position.y !== 0);
+          // Determine if this is the main background video or an overlay
+          const isMainVideo = index === 0 && (!video.display?.position || 
+            (video.display.position.x === 0 && video.display.position.y === 0));
           
-          // For positioned videos, use the dimensions from editor or scale appropriately
-          if (hasPosition) {
-            // If dimensions are provided in details, use them
-            if (video.details?.width && video.details?.height) {
-              videoWidth = video.details.width;
-              videoHeight = video.details.height;
-            } else {
-              // Default to smaller size for overlay videos
-              videoWidth = Math.floor(width / 3); // 1/3 of main video width
-              videoHeight = Math.floor(height / 3); // 1/3 of main video height
-            }
+          if (isMainVideo) {
+            // Main video always uses full canvas size
+            videoWidth = cleanDimension(width, width);
+            videoHeight = cleanDimension(height, height);
+            console.log(`Main video ${index}: using full canvas size ${videoWidth}x${videoHeight}`);
           } else {
-            // Main video (no position or position 0,0) uses full canvas size
-            videoWidth = width;
-            videoHeight = height;
+            // Overlay videos use their specified dimensions or default smaller size
+            if (video.details?.width && video.details?.height) {
+              videoWidth = cleanDimension(video.details.width, Math.floor(width / 3));
+              videoHeight = cleanDimension(video.details.height, Math.floor(height / 3));
+              console.log(`Overlay video ${index}: using specified size ${videoWidth}x${videoHeight}`);
+            } else {
+              // Default to 1/3 of canvas size for overlays
+              videoWidth = cleanDimension(Math.floor(width / 3), Math.floor(width / 3));
+              videoHeight = cleanDimension(Math.floor(height / 3), Math.floor(height / 3));
+              console.log(`Overlay video ${index}: using default size ${videoWidth}x${videoHeight}`);
+            }
           }
+          // Clean and normalize position values
+          const cleanPosition = (pos: any): number => {
+            if (typeof pos === 'string') {
+              const numMatch = pos.match(/-?\d+\.?\d*/);
+              return numMatch ? parseFloat(numMatch[0]) : 0;
+            } else if (typeof pos === 'number') {
+              return pos;
+            }
+            return 0;
+          };
+          let xVid = cleanPosition(video.display?.position?.x ?? 0);
+          let yVid = cleanPosition(video.display?.position?.y ?? 0);
+          console.log(`[DEBUG] Video input: index=${index}, isMain=${isMainVideo}, x=${xVid}, y=${yVid}, size=${videoWidth}x${videoHeight}`);
 
-          console.log(`Video ${index}: size=${videoWidth}x${videoHeight}, positioned=${hasPosition}, position=${JSON.stringify(video.display?.position)}`);
+          // Note: Video dimensions are already calculated above based on main vs overlay logic
+          console.log(`Video ${index}: final size=${videoWidth}x${videoHeight}, isMain=${isMainVideo}`);
 
-          // Trim, scale, pad, and set PTS for video
+          // Trim, scale, pad, and set PTS for video - ใช้ scale ที่ไม่ขยายขึ้น
           const videoChain = 
             `[${index}:v]trim=start=0:duration=${clipDuration},` +
-            `scale=${videoWidth}:${videoHeight}:force_original_aspect_ratio=decrease,` +
+            `scale=w='min(iw,${videoWidth})':h='min(ih,${videoHeight})':force_original_aspect_ratio=decrease,` +
             `pad=${videoWidth}:${videoHeight}:(ow-iw)/2:(oh-ih)/2:black,` +
             `setsar=1,` +
             `setpts=PTS-STARTPTS+${videoStartTime}/TB[v${index}]`;
@@ -227,9 +273,11 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           console.log(`Added audio stream from video ${index} with ${audioDelayMs}ms delay`);
         });
 
-        // 2. Create a base canvas to overlay videos onto
+        // 2. Create a base canvas to overlay videos onto with even dimensions
         const totalDurationSec = duration / 1000;
-        const baseCanvas = `color=c=black:s=${width}x${height}:d=${totalDurationSec}[base]`;
+        const canvasWidth = width % 2 === 0 ? width : width + 1;
+        const canvasHeight = height % 2 === 0 ? height : height + 1;
+        const baseCanvas = `color=c=black:s=${canvasWidth}x${canvasHeight}:d=${totalDurationSec}[base]`;
         filterChains.unshift(baseCanvas); // Add to the beginning of the filter chains
 
         // 3. Chain the overlay filters
@@ -239,18 +287,18 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           const newOverlayOutput = index === validVideoTracks.length - 1 ? '[final]' : `[ov${index}]`;
           
           // Get position from display object, handle different cases properly
-          let x = 0;
-          let y = 0;
+          let xVid = 0;
+          let yVid = 0;
           
           // Check if this video has explicit position data
           if (video.display?.position) {
-            x = video.display.position.x || 0;
-            y = video.display.position.y || 0;
+            xVid = video.display.position.x || 0;
+            yVid = video.display.position.y || 0;
           } else {
             // For videos without position, assume they are background/main videos
             // Place them at (0,0) to cover the full canvas
-            x = 0;
-            y = 0;
+            xVid = 0;
+            yVid = 0;
           }
           
           // Handle scale factor if provided
@@ -259,7 +307,6 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           // Clean and normalize position values
           const cleanPosition = (pos: any): number => {
             if (typeof pos === 'string') {
-              // Remove 'px' suffix and other units, extract number
               const numMatch = pos.match(/-?\d+\.?\d*/);
               return numMatch ? parseFloat(numMatch[0]) : 0;
             } else if (typeof pos === 'number') {
@@ -269,8 +316,8 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           };
           
           // Apply cleaning to x and y positions
-          x = cleanPosition(x);
-          y = cleanPosition(y);
+          xVid = cleanPosition(xVid);
+          yVid = cleanPosition(yVid);
           
           // Determine if this is the main background video or an overlay
           const isMainVideo = index === 0 && (!video.display?.position || 
@@ -278,37 +325,167 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           
           if (isMainVideo) {
             // Main video should fill the canvas, position at (0,0)
-            x = 0;
-            y = 0;
-            console.log(`Main video ${index} positioned at origin: (${x}, ${y})`);
+            xVid = 0;
+            yVid = 0;
+            console.log(`Main video ${index} positioned at origin: (${xVid}, ${yVid})`);
           } else {
             // Overlay video - keep the calculated position
-            console.log(`Overlay video ${index} positioned at: (${x}, ${y})`);
+            console.log(`Overlay video ${index} positioned at: (${xVid}, ${yVid})`);
           }
           
           // Apply scale to position if needed
           if (scale !== 1) {
-            x = Math.round(x * scale);
-            y = Math.round(y * scale);
+            xVid = Math.round(xVid * scale);
+            yVid = Math.round(yVid * scale);
           }
           
           // Ensure values are integers for FFmpeg
-          x = Math.round(x);
-          y = Math.round(y);
+          xVid = Math.round(xVid);
+          yVid = Math.round(yVid);
           
           const startTimeSec = video.display.from / 1000;
           const endTimeSec = video.display.to / 1000;
 
-          console.log(`Video ${index}: overlay at x=${x}, y=${y} (scale=${scale}) from ${startTimeSec}s to ${endTimeSec}s`);
+          console.log(`Video ${index}: overlay at x=${xVid}, y=${yVid} (scale=${scale}) from ${startTimeSec}s to ${endTimeSec}s`);
 
-          const overlayFilter = `${lastOverlayOutput}${nextOverlayInput}overlay=x=${x}:y=${y}:enable='between(t,${startTimeSec},${endTimeSec})'${newOverlayOutput}`;
+          const overlayFilter = `${lastOverlayOutput} ${nextOverlayInput} overlay=x=${xVid}:y=${yVid}:enable='between(t,${startTimeSec},${endTimeSec})' ${newOverlayOutput}`;
           filterChains.push(overlayFilter);
           lastOverlayOutput = newOverlayOutput;
         });
         
+        // 4. Add image overlays on top of video layers if any images exist
+        if (overlayImageTracks.length > 0) {
+          console.log(`Adding ${overlayImageTracks.length} image overlays to video composition...`);
+          
+          // Image tracks are already sorted and validated in overlayImageTracks
+          if (overlayImageTracks.length > 0) {
+            // Add image inputs with proper frame rate and duration
+            const totalDurationSec = duration / 1000;
+            let imageInputIndex = validVideoTracks.length; // Start after video inputs
+            
+            overlayImageTracks.forEach((image, index) => {
+              console.log(`Adding image input ${imageInputIndex}:`, image.resolvedSrc);
+              
+              // Use proper FFmpeg options for image-to-video conversion
+              command = command.input(image.resolvedSrc)
+                .inputOptions([
+                  '-loop', '1',                              // Loop the image
+                  '-t', `${totalDurationSec}`,              // Total duration
+                  '-framerate', `${job.options.fps || 30}`, // Set frame rate
+                  '-pix_fmt', 'yuv420p'                     // Ensure proper pixel format
+                ]);
+              imageInputIndex++;
+            });
+            
+            // Helper function to ensure even dimensions for images
+            const cleanImageDimension = (value: any, fallback: number): number => {
+              let result;
+              if (typeof value === 'string') {
+                const numMatch = value.match(/\d+\.?\d*/);
+                result = numMatch ? parseInt(numMatch[0]) : fallback;
+              } else if (typeof value === 'number') {
+                result = Math.round(value);
+              } else {
+                result = fallback;
+              }
+              
+              // Ensure the dimension is even (required for H.264)
+              return result % 2 === 0 ? result : result + 1;
+            };
+            
+            // Helper for position
+            const cleanPosition = (pos: any): number => {
+              if (typeof pos === 'string') {
+                const numMatch = pos.match(/-?\d+\.?\d*/);
+                return numMatch ? parseFloat(numMatch[0]) : 0;
+              } else if (typeof pos === 'number') {
+                return pos;
+              }
+              return 0;
+            };
+            
+            // Create filter chains for each image overlay
+            overlayImageTracks.forEach((image, index) => {
+              const imageIndex = validVideoTracks.length + index;
+              const imageStartTime = image.display.from / 1000;
+              const imageEndTime = image.display.to / 1000;
+              
+              console.log(`Image ${index}: start=${imageStartTime}s, end=${imageEndTime}s`);
+              
+              // Get image dimensions with proper cleaning
+              let imageWidth, imageHeight;
+              
+              // Determine if this is the main background image or an overlay
+              const isMainImage = index === 0 && (!image.display?.position || 
+                (image.display.position.x === 0 && image.display.position.y === 0));
+              
+              if (isMainImage) {
+                // Main image uses full canvas size
+                imageWidth = cleanImageDimension(width, width);
+                imageHeight = cleanImageDimension(height, height);
+                console.log(`Main image ${index}: using full canvas size ${imageWidth}x${imageHeight}`);
+              } else {
+                // Overlay images use specified dimensions or default smaller size
+                if (image.details?.width && image.details?.height) {
+                  imageWidth = cleanImageDimension(image.details.width, Math.floor(width / 3));
+                  imageHeight = cleanImageDimension(image.details.height, Math.floor(height / 3));
+                  console.log(`Overlay image ${index}: using specified size ${imageWidth}x${imageHeight}`);
+                } else {
+                  // Default to 1/3 of canvas size for overlays
+                  imageWidth = cleanImageDimension(Math.floor(width / 3), Math.floor(width / 3));
+                  imageHeight = cleanImageDimension(Math.floor(height / 3), Math.floor(height / 3));
+                  console.log(`Overlay image ${index}: using default size ${imageWidth}x${imageHeight}`);
+                }
+              }
+              
+              // Get clean position values
+              const xImg = cleanPosition(image.display?.position?.x ?? 0);
+              const yImg = cleanPosition(image.display?.position?.y ?? 0);
+              
+              console.log(`[DEBUG] Image ${index}: position=(${xImg},${yImg}), size=${imageWidth}x${imageHeight}, isMain=${isMainImage}`);
+              
+              // Create image processing filter chain with crop support
+              let imageFilterChain = `[${imageIndex}:v]`;
+              
+              // Add crop filter if crop data exists
+              if (image.details?.crop) {
+                const crop = image.details.crop;
+                const cropX = Math.max(0, crop.x);
+                const cropY = Math.max(0, crop.y);
+                const cropW = Math.max(1, crop.width);
+                const cropH = Math.max(1, crop.height);
+                imageFilterChain += `crop=${cropW}:${cropH}:${cropX}:${cropY},`;
+                console.log(`Adding crop filter: crop=${cropW}:${cropH}:${cropX}:${cropY}`);
+              }
+              
+              // Continue with scale, pad, and other filters - ใช้ scale ที่ไม่ขยายขึ้น
+              imageFilterChain += 
+                `scale=w='min(iw,${imageWidth})':h='min(ih,${imageHeight})':force_original_aspect_ratio=decrease` +
+                `,pad=${imageWidth}:${imageHeight}:(ow-iw)/2:(oh-ih)/2:black` +
+                `,fps=${job.options.fps || 30}` +
+                `,format=yuv420p` +
+                `,setsar=1[img_${index}]`;
+              
+              filterChains.push(imageFilterChain);
+              
+              // Create overlay filter with proper timing control
+              const overlayLabel = `[img_${index}]`;
+              const outputLabel = index === overlayImageTracks.length - 1 ? '[final_mixed]' : `[tmp_${index}]`;
+              
+              // Use proper overlay syntax with timing
+              const overlayFilter = `${lastOverlayOutput}${overlayLabel}overlay=x=${xImg}:y=${yImg}:enable='between(t,${imageStartTime},${imageEndTime})'${outputLabel}`;
+              
+              filterChains.push(overlayFilter);
+              lastOverlayOutput = outputLabel;
+            });
+            
+            outputVideoLabel = lastOverlayOutput; // Update final output label
+          }
+        }
+        
         outputVideoLabel = lastOverlayOutput; // The final video is the result of the last overlay
 
-        // 4. Handle audio for multiple videos - mix all audio streams
+        // 5. Handle audio for multiple videos - mix all audio streams
         if (audioStreamsToMix.length > 1) {
           // Mix multiple audio streams
           const amixInputs = audioStreamsToMix.join('');
@@ -327,39 +504,353 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           console.log('No audio streams available');
         }
 
-        // Join all filter chains for the final complex filter string
+        // Join all filter chains for the final complex filter string (use semicolon separator)
         complexFilterString = filterChains.join(';');
+        
+        // 6. Add text overlays if any exist
+        if (textTracks.length > 0) {
+          console.log(`📝 Adding ${textTracks.length} text overlays...`);
+          console.log(`📍 Text base label: ${outputVideoLabel}`);
+          const textFilters = createTextFilters(textTracks, outputVideoLabel, job.options.fps || 30, width, height);
+          console.log(`🔤 Generated ${textFilters.length} text filters:`);
+          textFilters.forEach((filter, idx) => {
+            console.log(`  Text Filter ${idx}: ${filter}`);
+          });
+          
+          if (textFilters.length > 0) {
+            complexFilterString += ';' + textFilters.join(';');
+            outputVideoLabel = '[final_with_text]'; // Update final output label
+            console.log(`✅ Text filters added. New output label: ${outputVideoLabel}`);
+          } else {
+            console.log('⚠️ No text filters were generated!');
+          }
+        }
       }
       
-    } else if (imageTracks.length > 0) {
-      // If we have images but no videos, create video from first image
-      const mainImage = imageTracks[0];
-      const imageSrc = resolveMediaPath(mainImage.details?.src || '');
+    } else if (imageTracks.length > 0 || textTracks.length > 0) {
+      // Handle image tracks and/or text tracks (when no video tracks exist)
+      console.log(`Processing ${imageTracks.length} image tracks and ${textTracks.length} text tracks...`);
+
+      // Sort image tracks by display.from to ensure correct order
+      const sortedImageTracks = [...imageTracks].sort((a, b) => {
+        const fromA = a.display?.from || 0;
+        const fromB = b.display?.from || 0;
+        return fromA - fromB;
+      });
       
-      if (checkFileExists(imageSrc)) {
-        console.log('✓ Using main image:', imageSrc);
-        command = command.input(imageSrc)
-          .inputOptions(['-loop 1', '-t', `${duration / 1000}`]);
+      console.log('Image tracks sorted by display.from:');
+      sortedImageTracks.forEach((image, index) => {
+        console.log(`  ${index}: from=${image.display?.from}, to=${image.display?.to}, src=${image.details?.src}`);
+      });
+
+      // Validate all image files exist first
+      let soloImageTracks: any[] = [];
+      for (const image of sortedImageTracks) {
+        const imageSrc = resolveMediaPath(image.details?.src || '');
+        if (checkFileExists(imageSrc)) {
+          soloImageTracks.push({ ...image, resolvedSrc: imageSrc });
+          console.log(`✓ Valid image file: ${imageSrc}`);
+        } else {
+          console.warn(`✗ Missing image file: ${imageSrc}`);
+        }
+      }
+      
+      if (soloImageTracks.length === 0) {
+        throw new Error('No valid image files found');
+      }
+
+      if (soloImageTracks.length === 1) {
+        // Single image - simple case
+        const mainImage = soloImageTracks[0];
+        const imageSrc = mainImage.resolvedSrc;
+        const imageDuration = (mainImage.display.to - mainImage.display.from) / 1000;
         
-        // Scale image to match output size
-        const imageFilter = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`;
-        command = command.videoFilters(imageFilter);
-        outputVideoLabel = '0:v'; // Video is from the first input
+        console.log('✓ Using single image:', imageSrc);
+        console.log(`Image duration: ${imageDuration}s`);
+        
+        command = command.input(imageSrc)
+          .inputOptions([
+            '-loop', '1', 
+            '-t', `${imageDuration}`,
+            '-framerate', `${job.options.fps || 30}`
+          ]);
+
+        const filterChains: string[] = [];
+        
+        // Handle image positioning and scaling
+        const imagePosition = mainImage.display?.position;
+        let imageWidth = mainImage.details?.scaledWidth || mainImage.details?.width || width;
+        let imageHeight = mainImage.details?.scaledHeight || mainImage.details?.height || height;
+        
+        // Clean dimension values and ensure even numbers for H.264 compatibility
+        const cleanDimension = (value: any, fallback: number): number => {
+          let result;
+          if (typeof value === 'string') {
+            const numMatch = value.match(/\d+\.?\d*/);
+            result = numMatch ? parseInt(numMatch[0]) : fallback;
+          } else if (typeof value === 'number') {
+            result = Math.round(value);
+          } else {
+            result = fallback;
+          }
+          
+          // Ensure the dimension is even (required for H.264)
+          return result % 2 === 0 ? result : result + 1;
+        };
+        
+        imageWidth = cleanDimension(imageWidth, width);
+        imageHeight = cleanDimension(imageHeight, height);
+        
+        // Ensure canvas dimensions are also even
+        const canvasWidth = width % 2 === 0 ? width : width + 1;
+        const canvasHeight = height % 2 === 0 ? height : height + 1;
+        
+        let imageFilter;
+        if (imagePosition && (imagePosition.x !== 0 || imagePosition.y !== 0)) {
+          // Positioned image - scale to specified dimensions
+          imageFilter = [
+            `scale=${imageWidth}:${imageHeight}:force_original_aspect_ratio=decrease`,
+            `pad=${imageWidth}:${imageHeight}:(ow-iw)/2:(oh-ih)/2:black`,
+            `fps=${job.options.fps || 30}`,
+            `format=yuv420p`,
+            `setsar=1`
+          ];
+        } else {
+          // Full canvas image - scale to fill entire canvas with even dimensions
+          imageFilter = [
+            `scale=${canvasWidth}:${canvasHeight}:force_original_aspect_ratio=decrease`,
+            `pad=${canvasWidth}:${canvasHeight}:(ow-iw)/2:(oh-ih)/2:black`,
+            `fps=${job.options.fps || 30}`,
+            `format=yuv420p`,
+            `setsar=1`
+          ];
+        }
+        
+        // Check if we have text overlays - if so, use complex filter
+        if (textTracks.length > 0) {
+          // Use complex filter to handle text overlays
+          filterChains.push(`[0:v]${imageFilter.join(',')}[img0]`);
+          outputVideoLabel = 'img0';
+        } else {
+          // No text overlays - use simple filter
+          command = command.videoFilters(imageFilter);
+          outputVideoLabel = '0:v';
+        }
         hasVideoAudio = false;
 
       } else {
-        console.warn('✗ Missing image file, creating blank video:', imageSrc);
-        // Fallback: create blank video
-        command = command.input(`color=c=black:size=${width}x${height}:duration=${duration / 1000}:rate=${job.options.fps}`)
-          .inputFormat('lavfi');
-        outputVideoLabel = '0:v';
+        // Multiple images - create overlay system
+        console.log(`Overlaying ${soloImageTracks.length} images...`);
+
+        // Add all image inputs with proper frame rate and duration
+        const totalDurationSec = duration / 1000;
+        soloImageTracks.forEach((image) => {
+          console.log(`Adding image input:`, image.resolvedSrc);
+          command = command.input(image.resolvedSrc)
+            .inputOptions([
+              '-loop', '1',
+              '-t', `${totalDurationSec}`,
+              '-framerate', `${job.options.fps || 30}`
+            ]);
+        });
+
+        const filterChains: string[] = [];
+
+        // Helper function to clean dimension values and ensure even numbers
+        const cleanDimension = (value: any, fallback: number): number => {
+          let result;
+          if (typeof value === 'string') {
+            const numMatch = value.match(/\d+\.?\d*/);
+            result = numMatch ? parseInt(numMatch[0]) : fallback;
+          } else if (typeof value === 'number') {
+            result = Math.round(value);
+          } else {
+            result = fallback;
+          }
+          
+          // Ensure the dimension is even (required for H.264)
+          return result % 2 === 0 ? result : result + 1;
+        };
+
+        // 1. Create a base canvas first with even dimensions
+        const canvasWidth = width % 2 === 0 ? width : width + 1;
+        const canvasHeight = height % 2 === 0 ? height : height + 1;
+        const baseCanvas = `color=c=black:s=${canvasWidth}x${canvasHeight}:d=${totalDurationSec}:r=${job.options.fps || 30}[base]`;
+        filterChains.push(baseCanvas);
+
+        // 2. Prepare each image stream with proper frame rate
+        soloImageTracks.forEach((image, index) => {
+          const imageDuration = (image.display.to - image.display.from) / 1000;
+          const imageStartTime = image.display.from / 1000;
+
+          console.log(`Image ${index}: start=${imageStartTime}s, duration=${imageDuration}s`);
+
+          // Get image dimensions from details or use default scaling
+          let imageWidth = cleanDimension(image.details?.scaledWidth || image.details?.width, width);
+          let imageHeight = cleanDimension(image.details?.scaledHeight || image.details?.height, height);
+          
+          // Check if image has position data
+          const hasPosition = image.display?.position && 
+            (image.display.position.x !== 0 || image.display.position.y !== 0);
+          
+          // For positioned images, use specified dimensions
+          if (hasPosition) {
+            // If dimensions are provided in details, use them
+            if (image.details?.scaledWidth && image.details?.scaledHeight) {
+              imageWidth = image.details.scaledWidth;
+              imageHeight = image.details.scaledHeight;
+            } else if (image.details?.width && image.details?.height) {
+              imageWidth = image.details.width;
+              imageHeight = image.details.height;
+            } else {
+              // Default to smaller size for overlay images
+              imageWidth = Math.floor(width / 3);
+              imageHeight = Math.floor(height / 3);
+            }
+          } else {
+            // Main image (no position or position 0,0) uses full canvas size
+            imageWidth = width;
+            imageHeight = height;
+          }
+
+          console.log(`Image ${index}: size=${imageWidth}x${imageHeight}, positioned=${hasPosition}, position=${JSON.stringify(image.display?.position)}`);
+
+          // Build image filter chain with crop support
+          let imageFilterChain = `[${index}:v]`;
+          
+          // Add crop filter if crop data exists
+          if (image.details?.crop) {
+            const crop = image.details.crop;
+            const cropX = Math.max(0, crop.x);
+            const cropY = Math.max(0, crop.y);
+            const cropW = Math.max(1, crop.width);
+            const cropH = Math.max(1, crop.height);
+            imageFilterChain += ` crop=${cropW}:${cropH}:${cropX}:${cropY},`;
+            console.log(`Adding crop filter to image ${index}: crop=${cropW}:${cropH}:${cropX}:${cropY}`);
+          }
+          
+          // Continue with scale and format filters
+          imageFilterChain += 
+            ` scale=${imageWidth}:${imageHeight}:force_original_aspect_ratio=decrease, ` +
+            `pad=${imageWidth}:${imageHeight}:(ow-iw)/2:(oh-ih)/2:black, ` +
+            `fps=${job.options.fps || 30}, ` +
+            `format=yuv420p, ` +
+            `setsar=1 [img${index}]`;
+          filterChains.push(imageFilterChain);
+        });
+
+        // 3. Chain the overlay filters
+        let lastOverlayOutput = '[base]';
+        soloImageTracks.forEach((image, index) => {
+          const nextOverlayInput = `[img${index}]`;
+          const newOverlayOutput = index === soloImageTracks.length - 1 ? '[final]' : `[imgov${index}]`;
+          
+          // Get position from display object
+          let x = 0;
+          let y = 0;
+          
+          if (image.display?.position) {
+            x = image.display.position.x || 0;
+            y = image.display.position.y || 0;
+          }
+          
+          // Handle scale factor if provided
+          const scale = image.details?.scale || 1;
+          
+          // Clean and normalize position values
+          const cleanPosition = (pos: any): number => {
+            if (typeof pos === 'string') {
+              const numMatch = pos.match(/-?\d+\.?\d*/);
+              return numMatch ? parseFloat(numMatch[0]) : 0;
+            } else if (typeof pos === 'number') {
+              return pos;
+            }
+            return 0;
+          };
+          
+          x = cleanPosition(x);
+          y = cleanPosition(y);
+          
+          // Determine if this is the main background image or an overlay
+          const isMainImage = index === 0 && (!image.display?.position || 
+            (image.display.position.x === 0 && image.display.position.y === 0));
+          
+          if (isMainImage) {
+            // Main image should fill the canvas, position at (0,0)
+            x = 0;
+            y = 0;
+            console.log(`Main image ${index} positioned at origin: (${x}, ${y})`);
+          } else {
+            // Overlay image - keep the calculated position
+            console.log(`Overlay image ${index} positioned at: (${x}, ${y})`);
+          }
+          
+          // Apply scale to position if needed
+          if (scale !== 1) {
+            x = Math.round(x * scale);
+            y = Math.round(y * scale);
+          }
+          
+          // Ensure values are integers for FFmpeg
+          x = Math.round(x);
+          y = Math.round(y);
+          
+          const startTimeSec = image.display.from / 1000;
+          const endTimeSec = image.display.to / 1000;
+
+          console.log(`Image ${index}: overlay at x=${x}, y=${y} (scale=${scale}) from ${startTimeSec}s to ${endTimeSec}s`);
+
+          // Fixed overlay filter with proper spacing and syntax
+          const overlayFilter = `${lastOverlayOutput} ${nextOverlayInput} overlay=x=${x}:y=${y}:enable='between(t,${startTimeSec},${endTimeSec})' ${newOverlayOutput}`;
+          filterChains.push(overlayFilter);
+          lastOverlayOutput = newOverlayOutput;
+        });
+        
+        outputVideoLabel = lastOverlayOutput;
         hasVideoAudio = false;
+
+        // Join all filter chains for the final complex filter string
+        complexFilterString = filterChains.join('; ');
+        
+        // Add text overlays if any exist
+        if (textTracks.length > 0) {
+          console.log(`Adding ${textTracks.length} text overlays to image composition...`);
+          const textFilters = createTextFilters(textTracks, outputVideoLabel, job.options.fps || 30, width, height);
+          if (textFilters.length > 0) {
+            complexFilterString += '; ' + textFilters.join('; ');
+            outputVideoLabel = '[final_with_text]'; // Update final output label
+          }
+        }
       }
       
+    } else if (textTracks.length > 0) {
+      // Handle text-only content (no video or images)
+      console.log(`Processing ${textTracks.length} text tracks only...`);
+      
+      const totalDurationSec = duration / 1000;
+      const canvasWidth = width % 2 === 0 ? width : width + 1;
+      const canvasHeight = height % 2 === 0 ? height : height + 1;
+      
+      // Create base canvas for text
+      const baseCanvas = `color=c=black:s=${canvasWidth}x${canvasHeight}:d=${totalDurationSec}[textbase]`;
+      const filterChains = [baseCanvas];
+      
+      // Add text overlays
+      const textFilters = createTextFilters(textTracks, '[textbase]', job.options.fps || 30, width, height);
+      filterChains.push(...textFilters);
+      
+      complexFilterString = filterChains.join('; ');
+      outputVideoLabel = '[final_with_text]';
+      hasVideoAudio = false;
+      
     } else {
-      // Fallback: create blank video
-      console.log('No video/image content found, creating blank video');
-      command = command.input(`color=c=black:size=${width}x${height}:duration=${duration / 1000}:rate=${job.options.fps}`)
+      // Fallback: create blank video with even dimensions
+      console.log('No video/image/text content found, creating blank video');
+      const totalDurationSec = duration / 1000;
+      const canvasWidth = width % 2 === 0 ? width : width + 1;
+      const canvasHeight = height % 2 === 0 ? height : height + 1;
+      
+      command = command.input(`color=c=black:size=${canvasWidth}x${canvasHeight}:duration=${totalDurationSec}:rate=${job.options.fps || 30}`)
         .inputFormat('lavfi');
       outputVideoLabel = '0:v';
       hasVideoAudio = false;
@@ -399,8 +890,12 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
     
     // Apply the final complex filter if it was built
     if (complexFilterString) {
-      console.log('Applying complex filter:', complexFilterString);
+      console.log('🎬 Final Complex Filter String:');
+      console.log(complexFilterString);
+      console.log(`📍 Output Video Label: ${outputVideoLabel}`);
       command = command.complexFilter(complexFilterString);
+    } else {
+      console.log('⚠️ No complex filter was built!');
     }
 
     // Set final output mappings - improved audio handling
@@ -441,11 +936,12 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
     command
       .output(outputPath)
       .outputOptions([
-        '-pix_fmt yuv420p',
-        `-crf ${job.options.crf || 18}`,
-        '-preset medium',
-        `-r ${job.options.fps}`,
-        `-t ${duration / 1000}` // Set duration to match timeline
+        '-pix_fmt', 'yuv420p',
+        '-crf', `${job.options.crf || 18}`,
+        '-preset', 'medium',
+        '-r', `${job.options.fps || 30}`,
+        '-t', `${duration / 1000}`, // Set duration to match timeline
+        '-movflags', '+faststart' // For better streaming
       ])
       .on('start', (commandLine: string) => {
         console.log('FFmpeg command:', commandLine);
@@ -473,7 +969,7 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
   });
 };
 
-// Helper function to resolve media file paths
+// Helper function to resolve media file paths with proper path handling for FFmpeg
 const resolveMediaPath = (src: string): string => {
   if (src.startsWith('http://') || src.startsWith('https://')) {
     return src; // External URL
@@ -482,11 +978,14 @@ const resolveMediaPath = (src: string): string => {
   if (src.startsWith('/uploads/')) {
     // Local upload - convert to absolute path
     const uploadDir = process.env.UPLOAD_DIR || './uploads';
-    return path.join(uploadDir, src.replace('/uploads/', ''));
+    const filePath = path.join(uploadDir, src.replace('/uploads/', ''));
+    
+    // Convert Windows backslashes to forward slashes for FFmpeg
+    return filePath.replace(/\\/g, '/');
   }
   
-  // Assume it's already a valid file path
-  return src;
+  // Assume it's already a valid file path, convert backslashes to forward slashes
+  return src.replace(/\\/g, '/');
 };
 
 // Helper function to check if file exists
@@ -524,6 +1023,108 @@ const calculateTotalDuration = (trackItems: any[]): number => {
   
   console.log(`📏 Total timeline duration: ${maxEndTime}ms`);
   return Math.max(maxEndTime, 1000); // Minimum 1 second
+};
+
+// Helper function to create text overlay filters
+const createTextFilters = (textTracks: any[], inputLabel: string, fps: number, canvasWidth: number, canvasHeight: number): string[] => {
+  const textFilters: string[] = [];
+  let currentLabel = inputLabel;
+  
+  textTracks.forEach((textTrack, index) => {
+    const textStartTime = textTrack.display.from / 1000;
+    const textEndTime = textTrack.display.to / 1000;
+    const text = textTrack.details.text || 'Sample Text';
+    const rawFontSize = textTrack.details.fontSize || 24;
+    const fontColor = textTrack.details.color || '#ffffff';
+    const backgroundColor = textTrack.details.backgroundColor || 'transparent';
+    const textAlign = textTrack.details.textAlign || 'center';
+    const borderWidth = textTrack.details.borderWidth || 0;
+    const borderColor = textTrack.details.borderColor || '#000000';
+    
+    // Get font family early for debug logging
+    const fontFamily = textTrack.details.fontFamily || 'Arial';
+    
+    // Get position from display object with debug logging
+    const rawXText = textTrack.display?.position?.x || 0;
+    const rawYText = textTrack.display?.position?.y || 0;
+    
+    // ✅ TEXT POSITION FIX: ใช้ composition size โดยตรง (เหมือน video scaling)
+    // ไม่ต้อง scale เพราะ frontend ส่ง position ที่ถูกต้องแล้ว (อิงตาม composition size)
+    const fontSize = rawFontSize; // ใช้ font size ตามที่ user กำหนด
+    const xText = Math.max(0, Math.min(rawXText, canvasWidth - 10));
+    const yText = Math.max(fontSize, Math.min(rawYText + fontSize, canvasHeight - 10));
+    
+    console.log(`🎯 Text Position Fix for "${text}":`);
+    console.log(`  Raw Position: x=${rawXText}, y=${rawYText}`);
+    console.log(`  Font Size: ${fontSize}px`);
+    console.log(`  Canvas Size: ${canvasWidth}x${canvasHeight}`);
+    console.log(`  Final Position: x=${xText}, y=${yText}`);
+    console.log(`  Text Align: ${textAlign}`);
+    console.log(`  Font: ${fontFamily}`);
+    
+    console.log(`  Final FFmpeg Position: x=${xText}, y=${yText}`);
+    
+    // Create next output label
+    const nextLabel = index === textTracks.length - 1 ? '[final_with_text]' : `[text_${index}]`;
+    
+    // Escape text for FFmpeg (replace special characters)
+    const escapedText = text
+      .replace(/'/g, "\\'")
+      .replace(/:/g, "\\:")
+      .replace(/\[/g, "\\[")
+      .replace(/\]/g, "\\]")
+      .replace(/,/g, "\\,");
+    
+    // Build drawtext filter
+    let drawtextFilter = `${currentLabel}drawtext=`;
+    drawtextFilter += `text='${escapedText}':`;
+    drawtextFilter += `fontsize=${fontSize}:`;
+    drawtextFilter += `fontcolor=${fontColor}:`;
+    
+    // Add font family if specified (only for system fonts that FFmpeg recognizes)
+    const systemFonts = ['Arial', 'Impact', 'Times', 'serif', 'sans-serif', 'monospace'];
+    if (fontFamily && systemFonts.includes(fontFamily)) {
+      drawtextFilter += `font='${fontFamily}':`;
+    }
+    
+    // For text alignment in FFmpeg, we don't need to manually calculate x offset
+    // FFmpeg drawtext has built-in alignment support
+    drawtextFilter += `x=${xText}:y=${yText}:`;
+    
+    // Add text alignment if not left (FFmpeg doesn't have direct textAlign, but we can use positioning)
+    if (textAlign === 'center') {
+      // For center align, we need to adjust the x position
+      drawtextFilter = drawtextFilter.replace(`x=${xText}:`, `x=(w-text_w)/2:`);
+    } else if (textAlign === 'right') {
+      // For right align
+      drawtextFilter = drawtextFilter.replace(`x=${xText}:`, `x=w-text_w-${Math.max(10, xText)}:`);
+    }
+    // left alignment uses the specified x position
+    
+    // Add border/outline if specified
+    if (borderWidth > 0) {
+      drawtextFilter += `borderw=${borderWidth}:bordercolor=${borderColor}:`;
+    }
+    
+    // Add background color if not transparent
+    if (backgroundColor !== 'transparent') {
+      drawtextFilter += `box=1:boxcolor=${backgroundColor}:`;
+    }
+    
+    // Add timing
+    drawtextFilter += `enable='between(t,${textStartTime},${textEndTime})'`;
+    drawtextFilter += nextLabel;
+    
+    textFilters.push(drawtextFilter);
+    currentLabel = nextLabel;
+    
+    console.log(`✅ Text overlay ${index} created: "${text}"`);
+    console.log(`   Position: (${xText},${yText}), Align: ${textAlign}, Font: ${fontFamily}`);
+    console.log(`   Time: ${textStartTime}s to ${textEndTime}s`);
+    console.log(`   Filter: ${drawtextFilter}`);
+  });
+  
+  return textFilters;
 };
 
 // Future implementation with Remotion

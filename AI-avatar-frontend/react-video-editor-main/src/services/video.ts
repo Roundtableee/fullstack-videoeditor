@@ -80,116 +80,56 @@ export class VideoRenderService {
     }
 
     // 2️⃣ Send payload to backend
-    // Since we now use consistent 1920x1080 resolution, position mapping should be 1:1
+    // ใช้ขนาด canvas จาก options ที่ส่งมา (ไม่ดึงจาก DOM)
+    const finalSize = {
+      width: options.size?.width || 1920,
+      height: options.size?.height || 1080
+    };
+    console.log('🎯 FINAL CANVAS SIZE:', finalSize);
+
+    // ✅ TEXT POSITION SCALE FIX: คำนวณ scale จาก UI canvas → composition
+    let scaleX = 1, scaleY = 1;
+    if (typeof window !== 'undefined') {
+      const canvasEl = document.querySelector('.editor-canvas, canvas') as HTMLElement;
+      const rect = canvasEl?.getBoundingClientRect();
+      if (rect?.width && rect?.height) {
+        scaleX = finalSize.width / rect.width;
+        scaleY = finalSize.height / rect.height;
+        console.log('🔍 Text position scale:', scaleX, scaleY);
+      }
+    }
+
+    // map ตำแหน่งและขนาดให้ normalize เสมอ
     const enhancedTrackItems = design.trackItems.map((item) => {
       if ((item.type === 'video' || item.type === 'image' || item.type === 'text') && item.details) {
-        const currentDisplay = item.display as any;
-
-        // Helper function to clean position values
-        const cleanPositionValue = (value: any): number => {
-          if (typeof value === 'string') {
-            const numMatch = value.match(/-?\d+\.?\d*/);
-            return numMatch ? parseFloat(numMatch[0]) : 0;
-          } else if (typeof value === 'number') {
-            return value;
-          }
-          return 0;
+        // Normalize position and size
+        const getNum = (v: any) => (typeof v === 'string' ? parseFloat(v) : (typeof v === 'number' ? v : 0));
+        let rawX = getNum(item.details.left ?? item.details.x ?? 0);
+        let rawY = getNum(item.details.top ?? item.details.y ?? 0);
+        // ถ้าเป็น text ให้ apply scale จาก UI → composition
+        if (item.type === 'text') {
+          rawX = Math.round(rawX * scaleX);
+          rawY = Math.round(rawY * scaleY);
+        }
+        const x = rawX;
+        const y = rawY;
+        const position = { x, y };
+        let details = { ...item.details, x, y };
+        // Extract width and height values for normalization
+        const width = getNum(item.details.width);
+        const height = getNum(item.details.height);
+        if (width && height) {
+          details = { ...details, width, height };
+        }
+        
+        // ✅ TEXT POSITION ใช้ COMPOSITION SIZE โดยตรง
+        // ไม่ต้องส่ง originalCanvas size เพราะ backend จะใช้ job.options.size
+        
+        return {
+          ...item,
+          display: { ...item.display, position },
+          details
         };
-
-        // With consistent 1920x1080 resolution, positions should map directly
-        // No complex scaling needed since preview and output use same resolution
-        console.log(`📐 Using 1:1 position mapping for ${item.type} ${item.id}`);
-
-        // Get output video dimensions
-        const outputWidth = options.size.width;
-        const outputHeight = options.size.height;
-
-        // Since we now use consistent 1920x1080 resolution for both preview and output,
-        // we use 1:1 mapping without complex scaling
-        const previewWidth = outputWidth;   // Same resolution for preview and output
-        const previewHeight = outputHeight; // Same resolution for preview and output
-
-        // Extract editor-provided position values
-        const previewX = cleanPositionValue(item.details.left ?? item.details.x ?? 0);
-        const previewY = cleanPositionValue(item.details.top ?? item.details.y ?? 0);
-
-        // Calculate scaling factors (should be 1:1 with consistent resolution)
-        const scaleX = outputWidth / previewWidth;   // Should be 1.0
-        const scaleY = outputHeight / previewHeight; // Should be 1.0
-
-        // Scale coordinates from preview to output resolution using exact video dimensions
-        // This ensures positions match exactly between preview and final video
-        const scaledX = Math.round(previewX * scaleX);
-        const scaledY = Math.round(previewY * scaleY);
-
-        // Also scale dimensions if available for proper cropping
-        let scaledWidth, scaledHeight, originalWidth, originalHeight;
-        if (item.details.width !== undefined && item.details.height !== undefined) {
-          const previewW = cleanPositionValue(item.details.width);
-          const previewH = cleanPositionValue(item.details.height);
-          
-          // Store original dimensions for cropping calculations
-          originalWidth = previewW;
-          originalHeight = previewH;
-          
-          // Scale to output dimensions
-          scaledWidth = Math.round(previewW * scaleX);
-          scaledHeight = Math.round(previewH * scaleY);
-          
-          console.log(`📏 ${item.type} ${item.id}: Dimensions - preview: ${previewW}x${previewH} → output: ${scaledWidth}x${scaledHeight}`);
-        }
-
-        // Prioritize editor details for positioning if available
-        if (item.details.left !== undefined || item.details.top !== undefined || item.details.x !== undefined || item.details.y !== undefined) {
-          const position = { x: scaledX, y: scaledY };
-          
-          // Create enhanced item with position and scaled dimensions
-          const enhancedItem = { 
-            ...item, 
-            display: { ...item.display, position } as any
-          };
-          
-          // Add scaled dimensions and original dimensions to details for backend processing
-          if (scaledWidth !== undefined && scaledHeight !== undefined) {
-            enhancedItem.details = {
-              ...enhancedItem.details,
-              scaledWidth,
-              scaledHeight,
-              originalWidth,
-              originalHeight,
-              // Add cropping information for images that are larger than the preview
-              shouldCrop: item.type === 'image' && (originalWidth > scaledWidth || originalHeight > scaledHeight)
-            };
-          }
-          
-          console.log(`🎯 Using editor details for position on ${item.type} ${item.id}:`);
-          console.log(`   Preview: (${previewX}, ${previewY}) → Output: (${scaledX}, ${scaledY})`);
-          console.log(`   Preview size: ${previewWidth}x${previewHeight} → Output size: ${outputWidth}x${outputHeight}`);
-          console.log(`   Scale factors: ${scaleX.toFixed(3)} x ${scaleY.toFixed(3)}`);
-          if (scaledWidth !== undefined) {
-            console.log(`   Dimensions: (${originalWidth}, ${originalHeight}) → (${scaledWidth}, ${scaledHeight})`);
-            console.log(`   Should crop: ${enhancedItem.details.shouldCrop}`);
-          }
-          
-          return enhancedItem;
-        } else if (currentDisplay.position) {
-          // Scale existing position in display
-          const previewPosX = cleanPositionValue(currentDisplay.position.x);
-          const previewPosY = cleanPositionValue(currentDisplay.position.y);
-          const scaledPosition = { 
-            x: Math.round(previewPosX * scaleX), 
-            y: Math.round(previewPosY * scaleY) 
-          };
-          console.log(`📍 Scaled existing display.position for ${item.type} ${item.id}:`);
-          console.log(`   Preview: (${previewPosX}, ${previewPosY}) → Output: (${scaledPosition.x}, ${scaledPosition.y})`);
-          console.log(`   Scale factors: ${scaleX.toFixed(3)} x ${scaleY.toFixed(3)}`);
-          return { ...item, display: { ...item.display, position: scaledPosition } as any };
-        }
-
-        // Default position if no editor or display values
-        const defaultPosition = { x: 0, y: 0 };
-        console.log(`🎬 Using default position for ${item.type} ${item.id}: x=${defaultPosition.x}, y=${defaultPosition.y}`);
-        return { ...item, display: { ...item.display, position: defaultPosition } as any };
       }
       return item;
     });
@@ -228,11 +168,8 @@ export class VideoRenderService {
         transitions: design.transitions ?? [],
       },
       options: {
-        fps: options.fps || 30,
-        size: options.size,
-        format: options.format || 'mp4',
-        quality: options.quality || 70,
-        crf: options.crf || 18
+        ...options,
+        size: finalSize,
       },
     };
     

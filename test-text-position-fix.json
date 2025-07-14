@@ -1,0 +1,59 @@
+{
+  "design": {
+    "trackItems": [
+      {
+        "type": "video",
+        "id": "video-1",
+        "display": {
+          "from": 0,
+          "to": 5000
+        },
+        "details": {
+          "src": "/uploads/videos/04d6bb15-5488-4fec-b565-1be549f10db9.mp4",
+          "width": 1920,
+          "height": 1080
+        }
+      },
+      {
+        "type": "text",
+        "id": "text-1",
+        "display": {
+          "from": 1000,
+          "to": 4000,
+          "position": { "x": 200, "y": 200 }
+        },
+        "details": {
+          "text": "Text Position Fix Test",
+          "fontSize": 48,
+          "fontFamily": "Arial",
+          "color": "#FFFF00",
+          "alignment": "left"
+        }
+      },
+      {
+        "type": "text",
+        "id": "text-2",
+        "display": {
+          "from": 1500,
+          "to": 3500,
+          "position": { "x": 960, "y": 540 }
+        },
+        "details": {
+          "text": "Center Text",
+          "fontSize": 64,
+          "fontFamily": "Arial",
+          "color": "#00FF00",
+          "alignment": "center"
+        }
+      }
+    ],
+    "transitions": []
+  },
+  "options": {
+    "size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "fps": 30
+  }
+}
