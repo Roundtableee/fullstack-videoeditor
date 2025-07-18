@@ -43,6 +43,12 @@ const createCompositionFromJob = (job: RenderJobData) => {
 };
 
 // Create video with actual track items content
+// ✅ GITHUB COPILOT GUIDELINE:
+// - NEVER hardcode dimensions like 450:450, 1920x1080
+// - ALWAYS use payload.width, payload.height, payload.aspectRatio
+// - Use template literals ${variable} for dynamic FFmpeg filters
+// - Preserve original aspect ratio with elementAspectRatio from payload
+// - Choose force_original_aspect_ratio based on AR comparison (disable/decrease)
 const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise<void> => {
   return new Promise((resolve, reject) => {
     const ffmpeg = require('fluent-ffmpeg');
@@ -65,10 +71,25 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
     console.log('================================');
     
     const duration = calculateTotalDuration(job.design.trackItems);
+    
+    // ✅ EXTRACT DYNAMIC VALUES FROM PAYLOAD - NO HARDCODED DIMENSIONS
     const { width, height } = job.options?.size;
-    if (!width || !height) {
-      throw new Error('options.size (width/height) is required and must be set by frontend');
+    const canvasWidth = job.options?.width || width;
+    const canvasHeight = job.options?.height || height;
+    const aspectRatio = job.options?.aspectRatio || (canvasWidth / canvasHeight);
+    const aspectRatioString = job.options?.aspectRatioString || `${canvasWidth}:${canvasHeight}`;
+    
+    if (!canvasWidth || !canvasHeight) {
+      throw new Error('Canvas dimensions (width/height) are required from frontend payload');
     }
+    
+    console.log('🎯 DYNAMIC CANVAS FROM PAYLOAD:', {
+      width: canvasWidth,
+      height: canvasHeight,
+      aspectRatio,
+      aspectRatioString,
+      originalSize: { width, height }
+    });
     
     // Check if we have any track items with actual content
     const videoTracks = job.design.trackItems.filter(item => 
@@ -161,12 +182,13 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
         command = command.input(mainVideo.resolvedSrc);
         
         // For a single video, it should always fill the canvas.
-        const videoWidth = width % 2 === 0 ? width : width + 1;
-        const videoHeight = height % 2 === 0 ? height : height + 1;
+        // ✅ USE DYNAMIC CANVAS SIZE FROM PAYLOAD - NO HARDCODED VALUES
+        const videoWidth = canvasWidth % 2 === 0 ? canvasWidth : canvasWidth + 1;
+        const videoHeight = canvasHeight % 2 === 0 ? canvasHeight : canvasHeight + 1;
         
-        console.log(`Single video forced to full canvas size: ${videoWidth}x${videoHeight}`);
+        console.log(`✅ Single video using dynamic canvas: ${videoWidth}x${videoHeight} (AR: ${aspectRatio})`);
 
-        // Scale video to match output size - ไม่ขยายขึ้น
+        // ✅ Scale video using payload dimensions - template literals
         command = command.videoFilters([
           `scale=w='min(iw,${videoWidth})':h='min(ih,${videoHeight})':force_original_aspect_ratio=decrease`,
           `pad=${videoWidth}:${videoHeight}:(ow-iw)/2:(oh-ih)/2:black`
@@ -213,19 +235,24 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
             return result % 2 === 0 ? result : result + 1;
           };
 
-          // ✅ CONSISTENT VIDEO SIZE: Use frontend provided dimensions (same as image approach)  
+          // ✅ CONSISTENT VIDEO SIZE: Use frontend provided dimensions (dynamic values)
           let videoWidth, videoHeight;
           
-          if (video.details?.width && video.details?.height) {
-            // Use dimensions from frontend (same approach as image)
-            videoWidth = cleanDimension(video.details.width, Math.floor(width / 3));
-            videoHeight = cleanDimension(video.details.height, Math.floor(height / 3));
-            console.log(`Video ${index}: using frontend size ${videoWidth}x${videoHeight} from details (same as image)`);
+          if (video.details?.dynamicWidth && video.details?.dynamicHeight) {
+            // ✅ Use dynamic dimensions from payload - NO HARDCODED VALUES
+            videoWidth = cleanDimension(video.details.dynamicWidth, Math.floor(canvasWidth / 3));
+            videoHeight = cleanDimension(video.details.dynamicHeight, Math.floor(canvasHeight / 3));
+            console.log(`✅ Video ${index}: using dynamic payload size ${videoWidth}x${videoHeight} (AR: ${video.details.elementAspectRatio || 'auto'})`);
+          } else if (video.details?.width && video.details?.height) {
+            // Fallback to legacy width/height
+            videoWidth = cleanDimension(video.details.width, Math.floor(canvasWidth / 3));
+            videoHeight = cleanDimension(video.details.height, Math.floor(canvasHeight / 3));
+            console.log(`📐 Video ${index}: using legacy size ${videoWidth}x${videoHeight}`);
           } else {
-            // Fallback to 1/3 of canvas size only if no size provided
-            videoWidth = cleanDimension(Math.floor(width / 3), Math.floor(width / 3));
-            videoHeight = cleanDimension(Math.floor(height / 3), Math.floor(height / 3));
-            console.log(`Video ${index}: using fallback size ${videoWidth}x${videoHeight} (no size from frontend)`);
+            // ✅ Fallback using dynamic canvas dimensions
+            videoWidth = cleanDimension(Math.floor(canvasWidth / 3), Math.floor(canvasWidth / 3));
+            videoHeight = cleanDimension(Math.floor(canvasHeight / 3), Math.floor(canvasHeight / 3));
+            console.log(`⚠️ Video ${index}: using calculated fallback ${videoWidth}x${videoHeight} from canvas ${canvasWidth}x${canvasHeight}`);
           }
           // Clean and normalize position values
           const cleanPosition = (pos: any): number => {
@@ -264,10 +291,13 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
 
         // 2. Create a base canvas to overlay videos onto with even dimensions
         const totalDurationSec = duration / 1000;
-        const canvasWidth = width % 2 === 0 ? width : width + 1;
-        const canvasHeight = height % 2 === 0 ? height : height + 1;
-        const baseCanvas = `color=c=black:s=${canvasWidth}x${canvasHeight}:d=${totalDurationSec}[base]`;
+        // ✅ USE DYNAMIC CANVAS DIMENSIONS FROM PAYLOAD
+        const finalCanvasWidth = canvasWidth % 2 === 0 ? canvasWidth : canvasWidth + 1;
+        const finalCanvasHeight = canvasHeight % 2 === 0 ? canvasHeight : canvasHeight + 1;
+        const baseCanvas = `color=c=black:s=${finalCanvasWidth}x${finalCanvasHeight}:d=${totalDurationSec}[base]`;
         filterChains.unshift(baseCanvas); // Add to the beginning of the filter chains
+        
+        console.log(`✅ Base canvas created: ${finalCanvasWidth}x${finalCanvasHeight} (AR: ${aspectRatio}) from payload`);
 
         // 3. Chain the overlay filters
         let lastOverlayOutput = '[base]';
@@ -386,19 +416,41 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
               
               console.log(`Image ${index}: start=${imageStartTime}s, end=${imageEndTime}s`);
               
-              // ✅ CONSISTENT IMAGE SIZE: Use frontend provided dimensions (same as video approach)
+              // ✅ CONSISTENT IMAGE SIZE: Use dynamic dimensions from payload
               let imageWidth, imageHeight;
               
-              if (image.details?.width && image.details?.height) {
-                // Use dimensions from frontend (originalWidth/originalHeight or width/height)
+              // ✅ CRITICAL DEBUG: แสดงข้อมูลที่ได้รับจาก frontend
+              console.log(`🔍 BACKEND RECEIVED for image ${index}:`, {
+                dynamicWidth: image.details?.dynamicWidth,
+                dynamicHeight: image.details?.dynamicHeight,
+                width: image.details?.width,
+                height: image.details?.height,
+                scaledWidth: image.details?.scaledWidth,
+                scaledHeight: image.details?.scaledHeight,
+                elementAspectRatio: image.details?.elementAspectRatio,
+                originalAspectRatio: image.details?.originalAspectRatio
+              });
+              
+              if (image.details?.dynamicWidth && image.details?.dynamicHeight) {
+                // ✅ Use dynamic dimensions from payload - NO HARDCODED VALUES
+                imageWidth = cleanImageDimension(image.details.dynamicWidth, 300);
+                imageHeight = cleanImageDimension(image.details.dynamicHeight, 200);
+                console.log(`✅ Image ${index}: using dynamic payload size ${imageWidth}x${imageHeight} (AR: ${image.details.elementAspectRatio || 'auto'})`);
+              } else if (image.details?.scaledWidth && image.details?.scaledHeight) {
+                // ✅ Use scaled dimensions (post-crop size) as backup
+                imageWidth = cleanImageDimension(image.details.scaledWidth, 300);
+                imageHeight = cleanImageDimension(image.details.scaledHeight, 200);
+                console.log(`✅ Image ${index}: using scaled size (post-crop) ${imageWidth}x${imageHeight}`);
+              } else if (image.details?.width && image.details?.height) {
+                // Fallback to legacy width/height
                 imageWidth = cleanImageDimension(image.details.width, 300);
                 imageHeight = cleanImageDimension(image.details.height, 200);
-                console.log(`Image ${index}: using frontend size ${imageWidth}x${imageHeight} from details`);
+                console.log(`📐 Image ${index}: using legacy size ${imageWidth}x${imageHeight}`);
               } else {
-                // Fallback to default size only if no size provided
+                // ✅ Fallback to calculated size from canvas
                 imageWidth = cleanImageDimension(300, 300);
                 imageHeight = cleanImageDimension(200, 200);
-                console.log(`Image ${index}: using fallback size ${imageWidth}x${imageHeight} (no size from frontend)`);
+                console.log(`⚠️ Image ${index}: using fallback size ${imageWidth}x${imageHeight}`);
               }
               
               // Get clean position values
@@ -425,14 +477,22 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
                 console.log(`Image ${index}: no crop data, using original image`);
               }
               
-              // ✅ ACCURATE IMAGE SCALING: Scale to exact frontend size without downscaling original
-              // Use scale filter to match preview size exactly (disable aspect ratio enforcement)
+              // ✅ PRESERVE IMAGE ASPECT RATIO: Use decrease to maintain original proportions
+              // Get element aspect ratio from payload or calculate from dimensions
+              const elementAR = image.details?.elementAspectRatio || (imageWidth / imageHeight);
+              const targetAR = imageWidth / imageHeight;
+              
+              // Choose scaling strategy based on aspect ratio preservation
+              const scaleStrategy = Math.abs(elementAR - targetAR) < 0.01 ? 'disable' : 'decrease';
+              
               imageFilterChain += 
-                `scale=${imageWidth}:${imageHeight}:force_original_aspect_ratio=disable` +
+                `scale=${imageWidth}:${imageHeight}:force_original_aspect_ratio=${scaleStrategy}` +
                 `,pad=${imageWidth}:${imageHeight}:(ow-iw)/2:(oh-ih)/2:black` +
                 `,fps=${job.options.fps || 30}` +
                 `,format=yuv420p` +
                 `,setsar=1[img_${index}]`;
+              
+              console.log(`✅ Image ${index} FFmpeg filter: scale=${imageWidth}:${imageHeight}:${scaleStrategy} (AR: ${elementAR.toFixed(3)} -> ${targetAR.toFixed(3)})`);
               
               filterChains.push(imageFilterChain);
               
@@ -547,8 +607,26 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
         
         // Handle image positioning and scaling
         const imagePosition = mainImage.display?.position;
-        let imageWidth = mainImage.details?.scaledWidth || mainImage.details?.width || width;
-        let imageHeight = mainImage.details?.scaledHeight || mainImage.details?.height || height;
+        
+        // ✅ USE DYNAMIC DIMENSIONS FROM PAYLOAD (หลังจาก crop/scale)
+        let imageWidth, imageHeight;
+        
+        if (mainImage.details?.dynamicWidth && mainImage.details?.dynamicHeight) {
+          // ✅ Use dynamic dimensions from payload - NO HARDCODED VALUES
+          imageWidth = mainImage.details.dynamicWidth;
+          imageHeight = mainImage.details.dynamicHeight;
+          console.log(`✅ Solo image using dynamic payload size: ${imageWidth}x${imageHeight} (AR: ${mainImage.details.elementAspectRatio || 'auto'})`);
+        } else if (mainImage.details?.scaledWidth && mainImage.details?.scaledHeight) {
+          // ✅ Use scaled dimensions (post-crop size) as backup
+          imageWidth = mainImage.details.scaledWidth;
+          imageHeight = mainImage.details.scaledHeight;
+          console.log(`✅ Solo image using scaled size (post-crop): ${imageWidth}x${imageHeight}`);
+        } else {
+          // Fallback to legacy approach with payload canvas dimensions
+          imageWidth = mainImage.details?.scaledWidth || mainImage.details?.width || canvasWidth;
+          imageHeight = mainImage.details?.scaledHeight || mainImage.details?.height || canvasHeight;
+          console.log(`📐 Solo image using legacy/canvas size: ${imageWidth}x${imageHeight}`);
+        }
         
         // Clean dimension values and ensure even numbers for H.264 compatibility
         const cleanDimension = (value: any, fallback: number): number => {
@@ -566,30 +644,35 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           return result % 2 === 0 ? result : result + 1;
         };
         
-        imageWidth = cleanDimension(imageWidth, width);
-        imageHeight = cleanDimension(imageHeight, height);
+        imageWidth = cleanDimension(imageWidth, canvasWidth);
+        imageHeight = cleanDimension(imageHeight, canvasHeight);
         
-        // Ensure canvas dimensions are also even
-        const canvasWidth = width % 2 === 0 ? width : width + 1;
-        const canvasHeight = height % 2 === 0 ? height : height + 1;
+        // ✅ Ensure final canvas dimensions use payload values
+        const finalCanvasWidth = canvasWidth % 2 === 0 ? canvasWidth : canvasWidth + 1;
+        const finalCanvasHeight = canvasHeight % 2 === 0 ? canvasHeight : canvasHeight + 1;
         
-        // Determine if image has explicit dimensions
-        const hasExplicitDims = (!!mainImage.details?.scaledWidth || !!mainImage.details?.width);
+        // Determine if image has explicit dimensions - รวม scaledWidth ด้วย (ขนาดหลังจาก crop)
+        const hasExplicitDims = (!!mainImage.details?.dynamicWidth || !!mainImage.details?.scaledWidth);
         let imageFilter;
         if (hasExplicitDims) {
-          // Positioned image (including at origin) - scale to specified dimensions without downscaling original
+          // ✅ PRESERVE ASPECT RATIO for positioned/sized images
+          const elementAR = mainImage.details?.elementAspectRatio || (imageWidth / imageHeight);
+          const targetAR = imageWidth / imageHeight;
+          const scaleStrategy = Math.abs(elementAR - targetAR) < 0.01 ? 'disable' : 'decrease';
+          
           imageFilter = [
-            `scale=${imageWidth}:${imageHeight}:force_original_aspect_ratio=disable`,
+            `scale=${imageWidth}:${imageHeight}:force_original_aspect_ratio=${scaleStrategy}`,
             `pad=${imageWidth}:${imageHeight}:(ow-iw)/2:(oh-ih)/2:black`,
             `fps=${job.options.fps || 30}`,
             `format=yuv420p`,
             `setsar=1`
           ];
+          console.log(`✅ Solo image positioned: ${imageWidth}x${imageHeight}:${scaleStrategy} (AR: ${elementAR.toFixed(3)} -> ${targetAR.toFixed(3)})`);
         } else {
           // No explicit size - treat as full canvas image
           imageFilter = [
-            `scale=${canvasWidth}:${canvasHeight}:force_original_aspect_ratio=decrease`,
-            `pad=${canvasWidth}:${canvasHeight}:(ow-iw)/2:(oh-ih)/2:black`,
+            `scale=${finalCanvasWidth}:${finalCanvasHeight}:force_original_aspect_ratio=decrease`,
+            `pad=${finalCanvasWidth}:${finalCanvasHeight}:(ow-iw)/2:(oh-ih)/2:black`,
             `fps=${job.options.fps || 30}`,
             `format=yuv420p`,
             `setsar=1`
@@ -613,13 +696,13 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
         console.log(`Overlaying ${soloImageTracks.length} images...`);
 
         // Add all image inputs with proper frame rate and duration
-        const totalDurationSec = duration / 1000;
+        const imageDurationSec = duration / 1000;
         soloImageTracks.forEach((image) => {
           console.log(`Adding image input:`, image.resolvedSrc);
           command = command.input(image.resolvedSrc)
             .inputOptions([
               '-loop', '1',
-              '-t', `${totalDurationSec}`,
+              '-t', `${imageDurationSec}`,
               '-framerate', `${job.options.fps || 30}`
             ]);
         });
@@ -642,11 +725,14 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           return result % 2 === 0 ? result : result + 1;
         };
 
-        // 1. Create a base canvas first with even dimensions
-        const canvasWidth = width % 2 === 0 ? width : width + 1;
-        const canvasHeight = height % 2 === 0 ? height : height + 1;
-        const baseCanvas = `color=c=black:s=${canvasWidth}x${canvasHeight}:d=${totalDurationSec}:r=${job.options.fps || 30}[base]`;
+        // ✅ 1. Create a base canvas using dynamic dimensions from payload
+        const multiImageDurationSec = duration / 1000;
+        const finalCanvasWidth = canvasWidth % 2 === 0 ? canvasWidth : canvasWidth + 1;
+        const finalCanvasHeight = canvasHeight % 2 === 0 ? canvasHeight : canvasHeight + 1;
+        const baseCanvas = `color=c=black:s=${finalCanvasWidth}x${finalCanvasHeight}:d=${multiImageDurationSec}:r=${job.options.fps || 30}[base]`;
         filterChains.push(baseCanvas);
+        
+        console.log(`✅ Multi-image base canvas: ${finalCanvasWidth}x${finalCanvasHeight} (AR: ${aspectRatio}) from payload`);
 
         // 2. Prepare each image stream with proper frame rate
         soloImageTracks.forEach((image, index) => {
@@ -655,32 +741,39 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
 
           console.log(`Image ${index}: start=${imageStartTime}s, duration=${imageDuration}s`);
 
-          // Get image dimensions from details or use default scaling
-          let imageWidth = cleanDimension(image.details?.scaledWidth || image.details?.width, width);
-          let imageHeight = cleanDimension(image.details?.scaledHeight || image.details?.height, height);
+          // ✅ Get image dimensions using dynamic values from payload (หลังจาก crop/scale)
+          let imageWidth, imageHeight;
+          
+          if (image.details?.dynamicWidth && image.details?.dynamicHeight) {
+            // ✅ Use dynamic dimensions from payload - NO HARDCODED VALUES
+            imageWidth = cleanDimension(image.details.dynamicWidth, canvasWidth);
+            imageHeight = cleanDimension(image.details.dynamicHeight, canvasHeight);
+            console.log(`✅ Multi-image ${index}: using dynamic payload size ${imageWidth}x${imageHeight}`);
+          } else if (image.details?.scaledWidth && image.details?.scaledHeight) {
+            // ✅ Use scaled dimensions (post-crop size) as backup
+            imageWidth = cleanDimension(image.details.scaledWidth, canvasWidth);
+            imageHeight = cleanDimension(image.details.scaledHeight, canvasHeight);
+            console.log(`✅ Multi-image ${index}: using scaled size (post-crop) ${imageWidth}x${imageHeight}`);
+          } else {
+            // Fallback to legacy approach
+            imageWidth = cleanDimension(image.details?.scaledWidth || image.details?.width, canvasWidth);
+            imageHeight = cleanDimension(image.details?.scaledHeight || image.details?.height, canvasHeight);
+            console.log(`📐 Multi-image ${index} using legacy size: ${imageWidth}x${imageHeight}`);
+          }
           
           // Check if image has position data
           const hasPosition = image.display?.position && 
             (image.display.position.x !== 0 || image.display.position.y !== 0);
           
-          // For positioned images, use specified dimensions
+          // For positioned images, validate dimensions
           if (hasPosition) {
-            // If dimensions are provided in details, use them
-            if (image.details?.scaledWidth && image.details?.scaledHeight) {
-              imageWidth = image.details.scaledWidth;
-              imageHeight = image.details.scaledHeight;
-            } else if (image.details?.width && image.details?.height) {
-              imageWidth = image.details.width;
-              imageHeight = image.details.height;
-            } else {
-              // Default to smaller size for overlay images
-              imageWidth = Math.floor(width / 3);
-              imageHeight = Math.floor(height / 3);
-            }
+            // Use calculated dimensions above (already handles dynamic vs legacy)
+            console.log(`📍 Positioned image ${index}: ${imageWidth}x${imageHeight} at ${JSON.stringify(image.display?.position)}`);
           } else {
-            // Main image (no position or position 0,0) uses full canvas size
-            imageWidth = width;
-            imageHeight = height;
+            // Main image uses full canvas size from payload
+            imageWidth = canvasWidth;
+            imageHeight = canvasHeight;
+            console.log(`🎯 Main image ${index}: using full canvas ${imageWidth}x${imageHeight}`);
           }
 
           console.log(`Image ${index}: size=${imageWidth}x${imageHeight}, positioned=${hasPosition}, position=${JSON.stringify(image.display?.position)}`);
@@ -699,14 +792,20 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
             console.log(`Adding crop filter to image ${index}: crop=${cropW}:${cropH}:${cropX}:${cropY}`);
           }
           
-          // Continue with scale and format filters
+          // ✅ Continue with scale using ORIGINAL aspect ratio preservation
+          const elementAR = image.details?.elementAspectRatio || (imageWidth / imageHeight);
+          const targetAR = imageWidth / imageHeight;
+          const scaleStrategy = Math.abs(elementAR - targetAR) < 0.01 ? 'disable' : 'decrease';
+          
           imageFilterChain += 
-            ` scale=${imageWidth}:${imageHeight}:force_original_aspect_ratio=decrease, ` +
+            ` scale=${imageWidth}:${imageHeight}:force_original_aspect_ratio=${scaleStrategy}, ` +
             `pad=${imageWidth}:${imageHeight}:(ow-iw)/2:(oh-ih)/2:black, ` +
             `fps=${job.options.fps || 30}, ` +
             `format=yuv420p, ` +
             `setsar=1 [img${index}]`;
           filterChains.push(imageFilterChain);
+          
+          console.log(`✅ Multi-image ${index} FFmpeg filter: scale=${imageWidth}:${imageHeight}:${scaleStrategy} (AR: ${elementAR.toFixed(3)} -> ${targetAR.toFixed(3)})`);
         });
 
         // 3. Chain the overlay filters

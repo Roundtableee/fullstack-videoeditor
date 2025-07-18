@@ -23,10 +23,11 @@ const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
+    // ใช้ environment variables แทน hardcode URLs
     origin: process.env.ALLOWED_ORIGINS?.split(',') || [
-      'http://localhost:3000', 
-      'http://localhost:5173', 
-      'http://localhost:5174',
+      process.env.FRONTEND_URL || 'http://localhost:3000',
+      process.env.DEV_URL_1 || 'http://localhost:5173', 
+      process.env.DEV_URL_2 || 'http://localhost:5174',
       'http://127.0.0.1:5173',
       'http://0.0.0.0:5173'
     ],
@@ -67,9 +68,9 @@ app.use(cors({
     
     // In production, check against allowed origins
     const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
-      'http://localhost:3000', 
-      'http://localhost:5173', 
-      'http://localhost:5174',
+      process.env.FRONTEND_URL || 'http://localhost:3000',
+      process.env.DEV_URL_1 || 'http://localhost:5173', 
+      process.env.DEV_URL_2 || 'http://localhost:5174',
       'http://127.0.0.1:5173',
       'http://0.0.0.0:5173'
     ];

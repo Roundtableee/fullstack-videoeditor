@@ -76,6 +76,12 @@ export interface VideoRenderOptions {
   format: string;
   quality?: number;
   crf?: number;
+  // ✅ ADD DYNAMIC VALUES FOR FFMPEG TEMPLATE LITERALS - NO HARDCODED DIMENSIONS
+  width?: number;              // Dynamic width from payload
+  height?: number;             // Dynamic height from payload
+  aspectRatio?: number;        // Calculated aspect ratio
+  aspectRatioString?: string;  // String format for FFmpeg filters
+  canvasDimensions?: { width: number; height: number }; // Full canvas object
 }
 
 export interface RenderJobData {

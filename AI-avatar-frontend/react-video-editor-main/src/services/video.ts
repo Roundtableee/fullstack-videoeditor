@@ -52,6 +52,13 @@ export class VideoRenderService {
 
   /**
    * Start a new render job
+   * 
+   * ✅ GITHUB COPILOT GUIDELINE:
+   * - Always use payload.width, payload.height for FFmpeg dimensions
+   * - Use template literals ${variable} for dynamic FFmpeg commands
+   * - Never hardcode values like 1920x1080 or 450:450
+   * - Extract aspectRatio from payload calculations
+   * - Use dynamicWidth/dynamicHeight for precise element sizing
    */
   async startRender(
     design: { trackItems: ITrackItem[]; transitions: ITransition[] },
@@ -80,12 +87,22 @@ export class VideoRenderService {
     }
 
     // 2️⃣ Send payload to backend
-    // ใช้ขนาด canvas จาก options ที่ส่งมา (ไม่ดึงจาก DOM)
+    // ✅ Dynamic canvas size from payload - NO HARDCODED VALUES
     const finalSize = {
       width: options.size?.width || 1920,
       height: options.size?.height || 1080
     };
-    console.log('🎯 FINAL CANVAS SIZE:', finalSize);
+    
+    // Calculate aspect ratio for FFmpeg commands
+    const aspectRatio = finalSize.width / finalSize.height;
+    const aspectRatioString = `${finalSize.width}:${finalSize.height}`;
+    
+    console.log('🎯 DYNAMIC CANVAS SIZE FROM PAYLOAD:', {
+      width: finalSize.width,
+      height: finalSize.height,
+      aspectRatio,
+      aspectRatioString
+    });
 
     // ✅ ACCURATE TEXT POSITION CALCULATION: ยึดตาม composition size โดยตรง
     const calculateAccurateTextPosition = (item: any, finalSize: any) => {
@@ -222,37 +239,87 @@ export class VideoRenderService {
         
         // ✅ CONSISTENT SIZE HANDLING: Image และ Video ใช้วิธีเดียวกัน
         if (item.type === 'image') {
-          // สำหรับ image ใช้ scaledWidth/scaledHeight หากมี หรือ fallback ไปที่ details.width/height
+          // ✅ ใช้ scaledWidth/scaledHeight = ขนาดหลังจาก crop/scale แล้ว (ขนาดจริงที่แสดงใน editor)
+          // หาก ไม่มี scaledWidth/scaledHeight ให้ fallback ไปที่ width/height
           const imageWidth = getNum(item.details.scaledWidth ?? item.details.width);
           const imageHeight = getNum(item.details.scaledHeight ?? item.details.height);
           
+          // ✅ Debug: แสดงทุกขนาดที่มี
+          console.log(`🔍 IMAGE SIZE DEBUG for ${item.id}:`, {
+            scaledWidth: item.details.scaledWidth, // ✅ ขนาดหลังจาก crop/scale
+            scaledHeight: item.details.scaledHeight, // ✅ ขนาดหลังจาก crop/scale
+            width: item.details.width, // ขนาดต้นฉบับใน editor
+            height: item.details.height, // ขนาดต้นฉบับใน editor
+            originalWidth: item.details.originalWidth, // ขนาดต้นฉบับของไฟล์
+            originalHeight: item.details.originalHeight, // ขนาดต้นฉบับของไฟล์
+            scale: item.details.scale,
+            shouldCrop: item.details.shouldCrop,
+            finalUsed: { imageWidth, imageHeight }
+          });
+          
           if (imageWidth && imageHeight) {
+            // ✅ Calculate ORIGINAL aspect ratio to preserve proportions
+            const originalAR = (item.details.originalWidth && item.details.originalHeight) 
+              ? (item.details.originalWidth / item.details.originalHeight)
+              : (imageWidth / imageHeight);
+              
             details = { 
               ...details, 
               width: imageWidth, 
-              height: imageHeight 
+              height: imageHeight,
+              // เพิ่มข้อมูลสำหรับ FFmpeg template literals  
+              dynamicWidth: imageWidth,
+              dynamicHeight: imageHeight,
+              elementAspectRatio: originalAR, // ✅ Use ORIGINAL aspect ratio
+              originalAspectRatio: originalAR
             };
-            console.log(`🖼️ Image ${item.id}: Using size ${imageWidth}x${imageHeight} from details (same as video)`);
+            console.log(`🖼️ Image ${item.id}: Using POST-CROP size ${imageWidth}x${imageHeight} (Original AR: ${originalAR.toFixed(3)})`);
+            
+            // ✅ VALIDATION: ตรวจสอบว่าขนาดที่ส่งไปสมเหตุสมผล
+            if (imageWidth <= 0 || imageHeight <= 0) {
+              console.error(`❌ Invalid image dimensions: ${imageWidth}x${imageHeight}`);
+            }
+          } else {
+            console.warn(`⚠️ Missing image dimensions for ${item.id}`);
           }
         } else if (item.type === 'video') {
-          // สำหรับ video ใช้ width/height จาก details เหมือน image (consistent approach)
+          // ✅ สำหรับ video ใช้ width/height จาก details เหมือน image
+          // ใช้ขนาดจาก editor โดยตรง - ไม่ hardcode ขนาด
           const videoWidth = getNum(item.details.width);
           const videoHeight = getNum(item.details.height);
           
           if (videoWidth && videoHeight) {
+            // ✅ Calculate ORIGINAL aspect ratio for video
+            const originalAR = (item.details.originalWidth && item.details.originalHeight) 
+              ? (item.details.originalWidth / item.details.originalHeight)
+              : (videoWidth / videoHeight);
+              
             details = { 
               ...details, 
               width: videoWidth, 
-              height: videoHeight 
+              height: videoHeight,
+              // เพิ่มข้อมูลสำหรับ FFmpeg template literals
+              dynamicWidth: videoWidth,
+              dynamicHeight: videoHeight,
+              elementAspectRatio: originalAR, // ✅ Use ORIGINAL aspect ratio
+              originalAspectRatio: originalAR
             };
-            console.log(`🎥 Video ${item.id}: Using size ${videoWidth}x${videoHeight} from details`);
+            console.log(`🎥 Video ${item.id}: Dynamic size ${videoWidth}x${videoHeight} (Original AR: ${originalAR.toFixed(3)})`);
           }
         } else {
-          // สำหรับ text ใช้ขนาดปกติ
+          // ✅ สำหรับ text ใช้ขนาดจาก editor โดยตรง - ไม่ hardcode
           const width = getNum(item.details.width);
           const height = getNum(item.details.height);
           if (width && height) {
-            details = { ...details, width, height };
+            details = { 
+              ...details, 
+              width, 
+              height,
+              // เพิ่มข้อมูลสำหรับ FFmpeg template literals
+              dynamicWidth: width,
+              dynamicHeight: height,
+              elementAspectRatio: width / height
+            };
           }
         }
         
@@ -291,6 +358,13 @@ export class VideoRenderService {
           originalHeight: media.details?.originalHeight,
           shouldCrop: media.details?.shouldCrop
         },
+        // ✅ NEW: Show what we're actually sending in payload
+        payloadData: {
+          dynamicWidth: media.details?.dynamicWidth,
+          dynamicHeight: media.details?.dynamicHeight,
+          elementAspectRatio: media.details?.elementAspectRatio,
+          originalAspectRatio: media.details?.originalAspectRatio
+        },
         display: media.display,
         finalPosition: display.position
       });
@@ -304,6 +378,12 @@ export class VideoRenderService {
       options: {
         ...options,
         size: finalSize,
+        // ✅ ADD DYNAMIC VALUES FOR FFMPEG COMMANDS - NO HARDCODED DIMENSIONS
+        width: finalSize.width,           // Dynamic width for template literals
+        height: finalSize.height,         // Dynamic height for template literals
+        aspectRatio: aspectRatio,         // Calculated aspect ratio
+        aspectRatioString: aspectRatioString, // String format for FFmpeg
+        canvasDimensions: finalSize,      // Full canvas object
       },
     };
     

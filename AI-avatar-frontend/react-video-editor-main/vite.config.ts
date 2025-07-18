@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  base: "./", // ใช้ relative path ช่วยให้เปิดบน Vercel ได้ทุกกรณี :contentReference[oaicite:5]{index=5}
+  base: "./", // ใช้ relative path ช่วยให้เปิดบน Vercel ได้ทุกกรณี
   plugins: [react()],
   resolve: {
     alias: {
@@ -17,20 +17,20 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://localhost:3002",
+        target: process.env.VITE_BACKEND_URL || "http://localhost:3002",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
       "/upload": {
-        target: "http://localhost:3002",
+        target: process.env.VITE_BACKEND_URL || "http://localhost:3002",
         changeOrigin: true,
       },
       "/uploads": {
-        target: "http://localhost:3002",
+        target: process.env.VITE_BACKEND_URL || "http://localhost:3002",
         changeOrigin: true,
       },
       "/outputs": {
-        target: "http://localhost:3002",
+        target: process.env.VITE_BACKEND_URL || "http://localhost:3002",
         changeOrigin: true,
       },
       "/audio": {

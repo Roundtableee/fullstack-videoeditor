@@ -1,6 +1,6 @@
 // File: react-video-editor-main/src/features/editor/menu-item/videos.tsx
 
-import React, { useState, useRef, ChangeEvent } from "react";
+import React, { useState, useRef, ChangeEvent, useEffect } from "react";
 import Draggable from "@/components/shared/draggable";
 import { VIDEOS as STATIC_VIDEOS } from "../data/video";
 import { dispatch } from "@designcombo/events";
@@ -8,12 +8,37 @@ import { ADD_VIDEO } from "@designcombo/state";
 import { IVideo, IVideoDetails } from "@designcombo/types";
 import { useIsDraggingOverTimeline } from "../hooks/is-dragging-over-timeline";
 import { generateId } from "@designcombo/timeline";
+import { Trash2 } from "lucide-react";
+import { fileUploadService } from "@/services/upload";
 
 export const Videos: React.FC = () => {
   const isDragging = useIsDraggingOverTimeline();
   const [library, setLibrary] = useState<Partial<IVideo>[]>([...STATIC_VIDEOS]);
   const [isUploading, setIsUploading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Load uploaded videos from localStorage on component mount
+  useEffect(() => {
+    const savedVideos = localStorage.getItem('uploadedVideos');
+    if (savedVideos) {
+      try {
+        const uploadedVideos = JSON.parse(savedVideos);
+        setLibrary(prev => [...uploadedVideos, ...STATIC_VIDEOS]);
+      } catch (error) {
+        console.error('Error loading saved videos:', error);
+      }
+    }
+  }, []);
+
+  // Save uploaded videos to localStorage whenever library changes
+  useEffect(() => {
+    const uploadedVideos = library.filter(video => 
+      video.metadata?.uploadedAt && !STATIC_VIDEOS.find(sv => sv.id === video.id)
+    );
+    if (uploadedVideos.length > 0) {
+      localStorage.setItem('uploadedVideos', JSON.stringify(uploadedVideos));
+    }
+  }, [library]);
 
   const addToTimeline = (item: IVideo) => {
     console.log("Adding to timeline:", item);
@@ -57,7 +82,7 @@ export const Videos: React.FC = () => {
         throw new Error(`อัปโหลดวิดีโอล้มเหลว (status ${response.status}): ${errorData.error || 'Unknown error'}`);
       }
 
-      const data: { id: string; url: string; type: string; filename: string; size: number } = await response.json();
+      const data: { id: string; url: string; type: string; filename: string; originalname?: string; size: number } = await response.json();
       console.log("Upload response JSON:", data);
 
       if (data.type !== "video") {
@@ -131,13 +156,14 @@ export const Videos: React.FC = () => {
       const newItem: Partial<IVideo> = {
         id: data.id,
         type: "video",
-        name: data.filename || file.name,
+        name: data.filename || file.name, // ใช้ filename ที่ decoded จาก backend
         details: { src: videoUrl } as IVideoDetails,
         preview,
         duration,
         metadata: {
           previewUrl: preview,
-          filename: data.filename || file.name,
+          filename: data.filename || file.name, // ชื่อไฟล์ภาษาไทยที่ถูกต้อง
+          originalname: data.originalname || file.name, // ชื่อไฟล์ต้นฉบับ
           size: data.size,
           uploadedAt: new Date().toISOString(),
         },
@@ -179,11 +205,42 @@ export const Videos: React.FC = () => {
     scrollRef.current?.scrollBy({ top: e.deltaY, behavior: "auto" });
   };
 
+  const handleDeleteVideo = async (video: Partial<IVideo>, event: React.MouseEvent) => {
+    event.stopPropagation(); // ป้องกันไม่ให้ trigger การ click ของ parent
+    
+    try {
+      // ลบจาก localStorage ก่อน
+      const updatedLibrary = library.filter(item => item.id !== video.id);
+      setLibrary(updatedLibrary);
+      
+      // อัปเดต localStorage
+      const uploadedVideos = updatedLibrary.filter(item => 
+        !STATIC_VIDEOS.some(staticVideo => staticVideo.id === item.id)
+      );
+      localStorage.setItem('uploadedVideos', JSON.stringify(uploadedVideos));
+      
+      // ลบไฟล์จาก backend (ถ้าเป็น uploaded file)
+      if (video.id && !STATIC_VIDEOS.some(staticVideo => staticVideo.id === video.id)) {
+        try {
+          await fileUploadService.deleteFile(video.id);
+          console.log('Video deleted from server:', video.id);
+        } catch (error) {
+          console.warn('Failed to delete from server:', error);
+          // ไม่ต้อง revert localStorage เพราะ user อาจต้องการลบแค่จาก local
+        }
+      }
+      
+    } catch (error) {
+      console.error('Error deleting video:', error);
+      alert('เกิดข้อผิดพลาดในการลบวิดีโอ');
+    }
+  };
+
   console.log("Rendering Videos component, library:", library);
 
   return (
     <div className="flex flex-col h-screen">
-      <div className="h-12 flex items-center px-4 text-sm font-medium text-text-primary">
+      <div className="h-12 flex items-center px-4 text-lg font-medium text-text-primary">
         Videos
       </div>
 
@@ -234,20 +291,40 @@ export const Videos: React.FC = () => {
                 }
                 shouldDisplayPreview={!isDragging}
               >
-                <div
-                  onClick={() => addToTimeline(video as IVideo)}
-                  className="flex w-full items-center justify-center overflow-hidden bg-background pb-2 rounded-lg"
-                >
-                  <img
-                    draggable={false}
-                    crossOrigin="anonymous"
-                    src={video.preview!}
-                    alt={video.name || "Video"}
-                    className="aspect-video w-[160px] object-cover rounded-md"
-                    onError={(e) =>
-                      console.error("Video preview image load error:", e.currentTarget.src)
-                    }
-                  />
+                <div className="relative group">
+                  <div
+                    onClick={() => addToTimeline(video as IVideo)}
+                    className="flex w-full items-center justify-center overflow-hidden bg-background pb-2 rounded-lg cursor-pointer"
+                  >
+                    <img
+                      draggable={false}
+                      crossOrigin="anonymous"
+                      src={video.preview!}
+                      alt={video.name || "Video"}
+                      className="aspect-video w-[160px] object-cover rounded-md"
+                      onError={(e) =>
+                        console.error("Video preview image load error:", e.currentTarget.src)
+                      }
+                    />
+                  </div>
+                  
+                  {/* Delete button - แสดงเฉพาะไฟล์ที่ upload */}
+                  {!STATIC_VIDEOS.some(staticVideo => staticVideo.id === video.id) && (
+                    <button
+                      onClick={(e) => handleDeleteVideo(video, e)}
+                      className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 bg-red-600 hover:bg-red-700 text-white rounded-full p-1.5 shadow-lg"
+                      title="ลบวิดีโอ"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                  
+                  {/* ชื่อไฟล์ */}
+                  <div className="mt-1 px-1">
+                    <p className="text-xs text-gray-600 truncate" title={video.name}>
+                      {video.name}
+                    </p>
+                  </div>
                 </div>
               </Draggable>
             );

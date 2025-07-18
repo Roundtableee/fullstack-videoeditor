@@ -29,7 +29,10 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);
-    const filename = `${uuidv4()}${ext}`;
+    // สร้าง timestamp สำหรับชื่อไฟล์ที่ไม่ซ้ำ
+    const timestamp = Date.now();
+    // เก็บชื่อไฟล์ต้นฉบับ (รองรับภาษาไทย) แต่ใช้ UUID + timestamp สำหรับชื่อไฟล์จริง
+    const filename = `${timestamp}_${uuidv4()}${ext}`;
     cb(null, filename);
   }
 });
@@ -77,7 +80,8 @@ router.post('/single', upload.single('file'), async (req: Request, res: Response
 
     const response = {
       id: path.parse(req.file.filename).name,
-      filename: req.file.originalname,
+      filename: Buffer.from(req.file.originalname, 'latin1').toString('utf8'), // รองรับภาษาไทย
+      originalname: req.file.originalname,
       size: req.file.size,
       mimetype: req.file.mimetype,
       url: fileUrl,
@@ -110,7 +114,8 @@ router.post('/multiple', upload.array('files', 10), async (req: Request, res: Re
       
       return {
         id: path.parse(file.filename).name,
-        filename: file.originalname,
+        filename: Buffer.from(file.originalname, 'latin1').toString('utf8'), // รองรับภาษาไทย
+        originalname: file.originalname,
         size: file.size,
         mimetype: file.mimetype,
         url: fileUrl,

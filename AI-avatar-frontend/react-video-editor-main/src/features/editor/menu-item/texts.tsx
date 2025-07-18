@@ -46,7 +46,7 @@ export const Texts = () => {
 
   return (
     <div className="flex flex-1 flex-col">
-      <div className="flex h-12 flex-none items-center px-4 font-medium text-sm text-text-primary">
+      <div className="flex h-12 flex-none items-center px-4 font-medium text-lg text-text-primary">
         Text
       </div>
       <div className="flex flex-col gap-2 px-4">
