@@ -46,9 +46,10 @@ class JobQueue {
     this.processing = false;
   }
 
-  private async processJob(job: RenderJobData): Promise<void> {
-    console.log(`Processing job ${job.id}`);
+  private  async processJob(job: RenderJobData): Promise<void> {
+    console.log(`🎬 Processing job ${job.id}`);
     
+    // อัพเดต status เป็น PROCESSING และ progress เป็น 0%
     await jobStorage.updateJob(job.id, {
       status: 'PROCESSING',
       progress: 0
@@ -58,20 +59,29 @@ class JobQueue {
     const { renderVideo } = await import('./renderService');
     
     try {
+      console.log(`📸 Starting render for job ${job.id}`);
+      
+      // อัพเดต progress เป็น 1% เมื่อเริ่ม process
+      await jobStorage.updateJob(job.id, { progress: 1 });
+      
       const result = await renderVideo(job);
       
+      console.log(`✅ Job ${job.id} completed successfully`);
+      
+      // อัพเดต status เป็น COMPLETED และ progress เป็น 100%
       await jobStorage.updateJob(job.id, {
         status: 'COMPLETED',
         progress: 100,
         outputPath: result.outputPath
       });
 
-      console.log(`Job ${job.id} completed successfully`);
     } catch (error) {
-      console.error(`Job ${job.id} failed:`, error);
+      console.error(`❌ Job ${job.id} failed:`, error);
       
+      // อัพเดต status เป็น FAILED พร้อมข้อผิดพลาด
       await jobStorage.updateJob(job.id, {
         status: 'FAILED',
+        progress: 0,
         error: error instanceof Error ? error.message : 'Render failed'
       });
     }

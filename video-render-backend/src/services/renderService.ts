@@ -213,30 +213,19 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
             return result % 2 === 0 ? result : result + 1;
           };
 
-          // Get video dimensions - main video uses full canvas, overlays use details
+          // ✅ CONSISTENT VIDEO SIZE: Use frontend provided dimensions (same as image approach)  
           let videoWidth, videoHeight;
           
-          // Determine if this is the main background video or an overlay
-          const isMainVideo = index === 0 && (!video.display?.position || 
-            (video.display.position.x === 0 && video.display.position.y === 0));
-          
-          if (isMainVideo) {
-            // Main video always uses full canvas size
-            videoWidth = cleanDimension(width, width);
-            videoHeight = cleanDimension(height, height);
-            console.log(`Main video ${index}: using full canvas size ${videoWidth}x${videoHeight}`);
+          if (video.details?.width && video.details?.height) {
+            // Use dimensions from frontend (same approach as image)
+            videoWidth = cleanDimension(video.details.width, Math.floor(width / 3));
+            videoHeight = cleanDimension(video.details.height, Math.floor(height / 3));
+            console.log(`Video ${index}: using frontend size ${videoWidth}x${videoHeight} from details (same as image)`);
           } else {
-            // Overlay videos use their specified dimensions or default smaller size
-            if (video.details?.width && video.details?.height) {
-              videoWidth = cleanDimension(video.details.width, Math.floor(width / 3));
-              videoHeight = cleanDimension(video.details.height, Math.floor(height / 3));
-              console.log(`Overlay video ${index}: using specified size ${videoWidth}x${videoHeight}`);
-            } else {
-              // Default to 1/3 of canvas size for overlays
-              videoWidth = cleanDimension(Math.floor(width / 3), Math.floor(width / 3));
-              videoHeight = cleanDimension(Math.floor(height / 3), Math.floor(height / 3));
-              console.log(`Overlay video ${index}: using default size ${videoWidth}x${videoHeight}`);
-            }
+            // Fallback to 1/3 of canvas size only if no size provided
+            videoWidth = cleanDimension(Math.floor(width / 3), Math.floor(width / 3));
+            videoHeight = cleanDimension(Math.floor(height / 3), Math.floor(height / 3));
+            console.log(`Video ${index}: using fallback size ${videoWidth}x${videoHeight} (no size from frontend)`);
           }
           // Clean and normalize position values
           const cleanPosition = (pos: any): number => {
@@ -250,10 +239,10 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           };
           let xVid = cleanPosition(video.display?.position?.x ?? 0);
           let yVid = cleanPosition(video.display?.position?.y ?? 0);
-          console.log(`[DEBUG] Video input: index=${index}, isMain=${isMainVideo}, x=${xVid}, y=${yVid}, size=${videoWidth}x${videoHeight}`);
+          console.log(`[DEBUG] Video input: index=${index}, x=${xVid}, y=${yVid}, size=${videoWidth}x${videoHeight}`);
 
-          // Note: Video dimensions are already calculated above based on main vs overlay logic
-          console.log(`Video ${index}: final size=${videoWidth}x${videoHeight}, isMain=${isMainVideo}`);
+          // Note: Video dimensions are calculated above based on frontend provided values
+          console.log(`Video ${index}: final size=${videoWidth}x${videoHeight}`);
 
           // Trim, scale, pad, and set PTS for video - ใช้ scale ที่ไม่ขยายขึ้น
           const videoChain = 
@@ -286,25 +275,7 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
           const nextOverlayInput = `[v${index}]`;
           const newOverlayOutput = index === validVideoTracks.length - 1 ? '[final]' : `[ov${index}]`;
           
-          // Get position from display object, handle different cases properly
-          let xVid = 0;
-          let yVid = 0;
-          
-          // Check if this video has explicit position data
-          if (video.display?.position) {
-            xVid = video.display.position.x || 0;
-            yVid = video.display.position.y || 0;
-          } else {
-            // For videos without position, assume they are background/main videos
-            // Place them at (0,0) to cover the full canvas
-            xVid = 0;
-            yVid = 0;
-          }
-          
-          // Handle scale factor if provided
-          const scale = video.details?.scale || 1;
-          
-          // Clean and normalize position values
+          // ✅ CONSISTENT POSITION PROCESSING: Use cleanPosition like image processing
           const cleanPosition = (pos: any): number => {
             if (typeof pos === 'string') {
               const numMatch = pos.match(/-?\d+\.?\d*/);
@@ -314,10 +285,13 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
             }
             return 0;
           };
+
+          // Get position from display object using cleanPosition immediately
+          let xVid = cleanPosition(video.display?.position?.x ?? 0);
+          let yVid = cleanPosition(video.display?.position?.y ?? 0);
           
-          // Apply cleaning to x and y positions
-          xVid = cleanPosition(xVid);
-          yVid = cleanPosition(yVid);
+          // Handle scale factor if provided
+          const scale = video.details?.scale || 1;
           
           // Determine if this is the main background video or an overlay
           const isMainVideo = index === 0 && (!video.display?.position || 
@@ -412,55 +386,49 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
               
               console.log(`Image ${index}: start=${imageStartTime}s, end=${imageEndTime}s`);
               
-              // Get image dimensions with proper cleaning
+              // ✅ CONSISTENT IMAGE SIZE: Use frontend provided dimensions (same as video approach)
               let imageWidth, imageHeight;
               
-              // Determine if this is the main background image or an overlay
-              const isMainImage = index === 0 && (!image.display?.position || 
-                (image.display.position.x === 0 && image.display.position.y === 0));
-              
-              if (isMainImage) {
-                // Main image uses full canvas size
-                imageWidth = cleanImageDimension(width, width);
-                imageHeight = cleanImageDimension(height, height);
-                console.log(`Main image ${index}: using full canvas size ${imageWidth}x${imageHeight}`);
+              if (image.details?.width && image.details?.height) {
+                // Use dimensions from frontend (originalWidth/originalHeight or width/height)
+                imageWidth = cleanImageDimension(image.details.width, 300);
+                imageHeight = cleanImageDimension(image.details.height, 200);
+                console.log(`Image ${index}: using frontend size ${imageWidth}x${imageHeight} from details`);
               } else {
-                // Overlay images use specified dimensions or default smaller size
-                if (image.details?.width && image.details?.height) {
-                  imageWidth = cleanImageDimension(image.details.width, Math.floor(width / 3));
-                  imageHeight = cleanImageDimension(image.details.height, Math.floor(height / 3));
-                  console.log(`Overlay image ${index}: using specified size ${imageWidth}x${imageHeight}`);
-                } else {
-                  // Default to 1/3 of canvas size for overlays
-                  imageWidth = cleanImageDimension(Math.floor(width / 3), Math.floor(width / 3));
-                  imageHeight = cleanImageDimension(Math.floor(height / 3), Math.floor(height / 3));
-                  console.log(`Overlay image ${index}: using default size ${imageWidth}x${imageHeight}`);
-                }
+                // Fallback to default size only if no size provided
+                imageWidth = cleanImageDimension(300, 300);
+                imageHeight = cleanImageDimension(200, 200);
+                console.log(`Image ${index}: using fallback size ${imageWidth}x${imageHeight} (no size from frontend)`);
               }
               
               // Get clean position values
               const xImg = cleanPosition(image.display?.position?.x ?? 0);
               const yImg = cleanPosition(image.display?.position?.y ?? 0);
               
-              console.log(`[DEBUG] Image ${index}: position=(${xImg},${yImg}), size=${imageWidth}x${imageHeight}, isMain=${isMainImage}`);
+              console.log(`[DEBUG] Image ${index}: position=(${xImg},${yImg}), size=${imageWidth}x${imageHeight}`);
               
               // Create image processing filter chain with crop support
               let imageFilterChain = `[${imageIndex}:v]`;
               
-              // Add crop filter if crop data exists
+              // ✅ IMPROVED CROP HANDLING: Better validation and error handling
               if (image.details?.crop) {
                 const crop = image.details.crop;
-                const cropX = Math.max(0, crop.x);
-                const cropY = Math.max(0, crop.y);
-                const cropW = Math.max(1, crop.width);
-                const cropH = Math.max(1, crop.height);
+                // Ensure crop values are within reasonable bounds
+                const cropX = Math.max(0, Math.round(crop.x || 0));
+                const cropY = Math.max(0, Math.round(crop.y || 0));
+                const cropW = Math.max(1, Math.round(crop.width || 100));
+                const cropH = Math.max(1, Math.round(crop.height || 100));
+                
                 imageFilterChain += `crop=${cropW}:${cropH}:${cropX}:${cropY},`;
-                console.log(`Adding crop filter: crop=${cropW}:${cropH}:${cropX}:${cropY}`);
+                console.log(`Image ${index}: applying crop=${cropW}:${cropH}:${cropX}:${cropY}`);
+              } else {
+                console.log(`Image ${index}: no crop data, using original image`);
               }
               
-              // Continue with scale, pad, and other filters - ใช้ scale ที่ไม่ขยายขึ้น
+              // ✅ ACCURATE IMAGE SCALING: Scale to exact frontend size without downscaling original
+              // Use scale filter to match preview size exactly (disable aspect ratio enforcement)
               imageFilterChain += 
-                `scale=w='min(iw,${imageWidth})':h='min(ih,${imageHeight})':force_original_aspect_ratio=decrease` +
+                `scale=${imageWidth}:${imageHeight}:force_original_aspect_ratio=disable` +
                 `,pad=${imageWidth}:${imageHeight}:(ow-iw)/2:(oh-ih)/2:black` +
                 `,fps=${job.options.fps || 30}` +
                 `,format=yuv420p` +
@@ -605,18 +573,20 @@ const createBasicVideo = async (job: RenderJobData, outputPath: string): Promise
         const canvasWidth = width % 2 === 0 ? width : width + 1;
         const canvasHeight = height % 2 === 0 ? height : height + 1;
         
+        // Determine if image has explicit dimensions
+        const hasExplicitDims = (!!mainImage.details?.scaledWidth || !!mainImage.details?.width);
         let imageFilter;
-        if (imagePosition && (imagePosition.x !== 0 || imagePosition.y !== 0)) {
-          // Positioned image - scale to specified dimensions
+        if (hasExplicitDims) {
+          // Positioned image (including at origin) - scale to specified dimensions without downscaling original
           imageFilter = [
-            `scale=${imageWidth}:${imageHeight}:force_original_aspect_ratio=decrease`,
+            `scale=${imageWidth}:${imageHeight}:force_original_aspect_ratio=disable`,
             `pad=${imageWidth}:${imageHeight}:(ow-iw)/2:(oh-ih)/2:black`,
             `fps=${job.options.fps || 30}`,
             `format=yuv420p`,
             `setsar=1`
           ];
         } else {
-          // Full canvas image - scale to fill entire canvas with even dimensions
+          // No explicit size - treat as full canvas image
           imageFilter = [
             `scale=${canvasWidth}:${canvasHeight}:force_original_aspect_ratio=decrease`,
             `pad=${canvasWidth}:${canvasHeight}:(ow-iw)/2:(oh-ih)/2:black`,

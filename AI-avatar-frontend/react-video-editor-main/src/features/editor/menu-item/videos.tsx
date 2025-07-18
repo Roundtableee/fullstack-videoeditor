@@ -38,9 +38,8 @@ export const Videos: React.FC = () => {
     setIsUploading(true);
 
     try {
-      // 1) เตรียม upload endpoint ที่ถูกต้อง
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
-      const uploadEndpoint = `${backendUrl}/upload/single`;
+      // ใช้ proxy path แทน direct URL
+      const uploadEndpoint = "/api/upload/single";
 
       console.log("Uploading video to:", uploadEndpoint);
       const formData = new FormData();
@@ -70,9 +69,9 @@ export const Videos: React.FC = () => {
       if (data.url.startsWith("http")) {
         videoUrl = data.url;
       } else {
-        // ลบ leading slash ถ้ามี แล้วใส่ backendUrl
+        // ใช้ proxy path สำหรับ uploads
         const cleanPath = data.url.startsWith("/") ? data.url : `/${data.url}`;
-        videoUrl = `${backendUrl}${cleanPath}`;
+        videoUrl = cleanPath; // ใช้ proxy แทน direct URL
       }
       console.log("Final videoUrl used:", videoUrl);
 

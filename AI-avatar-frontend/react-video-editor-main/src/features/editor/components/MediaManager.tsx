@@ -9,7 +9,6 @@ import {
 } from 'lucide-react';
 import MediaLibrary from './MediaLibrary';
 import FileUpload from './FileUpload';
-import { VideoExportButton, VideoExportProgress } from './VideoExport';
 import { UploadedFile } from '@/services/upload';
 import { useMediaImport } from '../hooks/useMediaImport';
 import { cn } from '@/lib/utils';
@@ -34,20 +33,8 @@ export const MediaManager: React.FC<MediaManagerProps> = ({ className }) => {
   };
 
   if (!isOpen) {
-    return (
-      <div className={cn("flex items-center gap-2", className)}>
-        <Button
-          onClick={() => setIsOpen(true)}
-          variant="outline"
-          className="flex items-center gap-2"
-        >
-          <Library className="h-4 w-4" />
-          Media Library
-        </Button>
-        <VideoExportButton />
-        <VideoExportProgress />
-      </div>
-    );
+    // Removed Media Library and Export Video buttons
+    return null;
   }
 
   return (
@@ -144,8 +131,6 @@ export const MediaToolbar: React.FC<{ className?: string }> = ({ className }) =>
         Quick Upload
       </Button>
       
-      <VideoExportButton />
-      <VideoExportProgress />
     </div>
   );
 };

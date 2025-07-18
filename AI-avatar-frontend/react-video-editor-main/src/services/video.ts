@@ -87,39 +87,173 @@ export class VideoRenderService {
     };
     console.log('🎯 FINAL CANVAS SIZE:', finalSize);
 
-    // ✅ TEXT POSITION SCALE FIX: คำนวณ scale จาก UI canvas → composition
-    let scaleX = 1, scaleY = 1;
-    if (typeof window !== 'undefined') {
-      const canvasEl = document.querySelector('.editor-canvas, canvas') as HTMLElement;
-      const rect = canvasEl?.getBoundingClientRect();
-      if (rect?.width && rect?.height) {
-        scaleX = finalSize.width / rect.width;
-        scaleY = finalSize.height / rect.height;
-        console.log('🔍 Text position scale:', scaleX, scaleY);
+    // ✅ ACCURATE TEXT POSITION CALCULATION: ยึดตาม composition size โดยตรง
+    const calculateAccurateTextPosition = (item: any, finalSize: any) => {
+      if (item.type !== 'text') return { x: 0, y: 0, textMetrics: null };
+
+      console.log('🎯 Calculating text position using composition size directly');
+      console.log('📏 Final composition size:', finalSize);
+      console.log('� Original item position:', {
+        left: item.details.left,
+        top: item.details.top,
+        x: item.details.x,
+        y: item.details.y
+      });
+
+      // ใช้ตำแหน่งจาก editor โดยตรง - ไม่ต้องแปลงเพราะ artboard มีขนาดเท่ากับ composition
+      const x = parseFloat(item.details.left ?? item.details.x ?? 0);
+      const y = parseFloat(item.details.top ?? item.details.y ?? 0);
+      
+      // สร้าง canvas สำหรับวัดข้อความ (เพื่อใช้ในการ debug)
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      let textMetrics = null;
+      
+      if (ctx) {
+        const fontSize = item.details.fontSize || 24;
+        const fontFamily = item.details.fontFamily || 'Arial';
+        ctx.font = `${fontSize}px ${fontFamily}`;
+        
+        const metrics = ctx.measureText(item.details.text || '');
+        textMetrics = {
+          width: metrics.width,
+          height: metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent,
+          fontSize,
+          fontFamily
+        };
       }
-    }
+
+      console.log('✅ Final text position:', { x, y });
+      console.log('📐 Text metrics:', textMetrics);
+
+      return {
+        x: Math.round(x),
+        y: Math.round(y),
+        textMetrics
+      };
+    };
+
+    // ✅ ACCURATE IMAGE POSITION CALCULATION: ใช้ composition size โดยตรงเหมือน text
+    const calculateAccurateImagePosition = (item: any, finalSize: any) => {
+      if (item.type !== 'image') return { x: 0, y: 0 };
+
+      console.log('🖼️ Calculating image position using composition size directly');
+      console.log('📏 Final composition size:', finalSize);
+      console.log('📍 Original image position:', {
+        left: item.details.left,
+        top: item.details.top,
+        x: item.details.x,
+        y: item.details.y
+      });
+
+      // ใช้ตำแหน่งจาก editor โดยตรง - ไม่ต้องแปลงเพราะ artboard มีขนาดเท่ากับ composition
+      const x = parseFloat(item.details.left ?? item.details.x ?? 0);
+      const y = parseFloat(item.details.top ?? item.details.y ?? 0);
+
+      console.log('🎯 Image position calculation result:', { x, y });
+      
+      return {
+        x: Math.round(x),
+        y: Math.round(y)
+      };
+    };
+
+    // ✅ ACCURATE VIDEO POSITION CALCULATION: ใช้ composition size โดยตรงเหมือน image และ text
+    const calculateAccurateVideoPosition = (item: any, finalSize: any) => {
+      if (item.type !== 'video') return { x: 0, y: 0 };
+
+      console.log('🎥 Calculating video position using composition size directly');
+      console.log('📏 Final composition size:', finalSize);
+      console.log('📍 Original video position:', {
+        left: item.details.left,
+        top: item.details.top,
+        x: item.details.x,
+        y: item.details.y
+      });
+
+      // ใช้ตำแหน่งจาก editor โดยตรง - ไม่ต้องแปลงเพราะ artboard มีขนาดเท่ากับ composition
+      const x = parseFloat(item.details.left ?? item.details.x ?? 0);
+      const y = parseFloat(item.details.top ?? item.details.y ?? 0);
+
+      console.log('🎯 Video position calculation result:', { x, y });
+      
+      return {
+        x: Math.round(x),
+        y: Math.round(y)
+      };
+    };
 
     // map ตำแหน่งและขนาดให้ normalize เสมอ
     const enhancedTrackItems = design.trackItems.map((item) => {
       if ((item.type === 'video' || item.type === 'image' || item.type === 'text') && item.details) {
-        // Normalize position and size
         const getNum = (v: any) => (typeof v === 'string' ? parseFloat(v) : (typeof v === 'number' ? v : 0));
-        let rawX = getNum(item.details.left ?? item.details.x ?? 0);
-        let rawY = getNum(item.details.top ?? item.details.y ?? 0);
-        // ถ้าเป็น text ให้ apply scale จาก UI → composition
-        if (item.type === 'text') {
-          rawX = Math.round(rawX * scaleX);
-          rawY = Math.round(rawY * scaleY);
+        
+        let x = getNum(item.details.left ?? item.details.x ?? 0);
+        let y = getNum(item.details.top ?? item.details.y ?? 0);
+        
+        // สำหรับ text ใช้การคำนวณแบบแม่นยำ - ยึดตาม composition size โดยตรง
+        if (item.type === 'text' && typeof window !== 'undefined') {
+          const accuratePos = calculateAccurateTextPosition(item, finalSize);
+          x = accuratePos.x;
+          y = accuratePos.y;
+          
+          // เก็บ text metrics ไว้ส่งให้ backend
+          if (accuratePos.textMetrics) {
+            item.details.textMetrics = accuratePos.textMetrics;
+          }
         }
-        const x = rawX;
-        const y = rawY;
+        
+        // สำหรับ image ใช้การคำนวณแบบแม่นยำ - ยึดตาม composition size โดยตรงเหมือน text
+        if (item.type === 'image' && typeof window !== 'undefined') {
+          const accuratePos = calculateAccurateImagePosition(item, finalSize);
+          x = accuratePos.x;
+          y = accuratePos.y;
+        }
+
+        // สำหรับ video ใช้การคำนวณแบบแม่นยำ - ยึดตาม composition size โดยตรงเหมือน image และ text
+        if (item.type === 'video' && typeof window !== 'undefined') {
+          const accuratePos = calculateAccurateVideoPosition(item, finalSize);
+          x = accuratePos.x;
+          y = accuratePos.y;
+        }
+
         const position = { x, y };
         let details = { ...item.details, x, y };
-        // Extract width and height values for normalization
-        const width = getNum(item.details.width);
-        const height = getNum(item.details.height);
-        if (width && height) {
-          details = { ...details, width, height };
+        
+        // ✅ CONSISTENT SIZE HANDLING: Image และ Video ใช้วิธีเดียวกัน
+        if (item.type === 'image') {
+          // สำหรับ image ใช้ scaledWidth/scaledHeight หากมี หรือ fallback ไปที่ details.width/height
+          const imageWidth = getNum(item.details.scaledWidth ?? item.details.width);
+          const imageHeight = getNum(item.details.scaledHeight ?? item.details.height);
+          
+          if (imageWidth && imageHeight) {
+            details = { 
+              ...details, 
+              width: imageWidth, 
+              height: imageHeight 
+            };
+            console.log(`🖼️ Image ${item.id}: Using size ${imageWidth}x${imageHeight} from details (same as video)`);
+          }
+        } else if (item.type === 'video') {
+          // สำหรับ video ใช้ width/height จาก details เหมือน image (consistent approach)
+          const videoWidth = getNum(item.details.width);
+          const videoHeight = getNum(item.details.height);
+          
+          if (videoWidth && videoHeight) {
+            details = { 
+              ...details, 
+              width: videoWidth, 
+              height: videoHeight 
+            };
+            console.log(`🎥 Video ${item.id}: Using size ${videoWidth}x${videoHeight} from details`);
+          }
+        } else {
+          // สำหรับ text ใช้ขนาดปกติ
+          const width = getNum(item.details.width);
+          const height = getNum(item.details.height);
+          if (width && height) {
+            details = { ...details, width, height };
+          }
         }
         
         // ✅ TEXT POSITION ใช้ COMPOSITION SIZE โดยตรง
@@ -207,18 +341,20 @@ export class VideoRenderService {
   }
 
   /**
-   * Poll render status until completion
+   * Poll render status until completion with enhanced progress tracking
    */
   async pollRenderStatus(
     renderId: string, 
     onProgress?: (progress: number, status: string) => void,
-    pollInterval = 2000
+    pollInterval = 1000 // ลดจาก 2000ms เป็น 1000ms เพื่อ update ถี่ขึ้น
   ): Promise<VideoRenderResponse> {
     return new Promise((resolve, reject) => {
       const poll = async () => {
         try {
           const response = await this.getRenderStatus(renderId);
           const { video } = response;
+          
+          console.log(`🎬 Render status: ${video.status}, progress: ${video.progress}%`);
           
           // Call progress callback
           if (onProgress) {
@@ -227,17 +363,19 @@ export class VideoRenderService {
 
           // Check if completed
           if (video.status === 'COMPLETED') {
+            console.log('✅ Render completed successfully!');
             resolve(response);
             return;
           }
           
           // Check if failed
           if (video.status === 'FAILED') {
+            console.error('❌ Render failed:', video.error);
             reject(new Error(video.error || 'Render failed'));
             return;
           }
           
-          // Continue polling
+          // Continue polling for PENDING or PROCESSING status
           setTimeout(poll, pollInterval);
           
         } catch (error) {

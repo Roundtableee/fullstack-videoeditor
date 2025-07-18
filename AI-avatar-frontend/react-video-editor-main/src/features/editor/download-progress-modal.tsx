@@ -34,26 +34,57 @@ const DownloadProgressModal = () => {
           </div>
           
           <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6">
-            <div className="text-6xl font-bold text-blue-600">
+            {/* Large Progress Percentage */}
+            <div className="text-7xl font-bold text-blue-600 tracking-tight">
               {Math.floor(progress)}%
             </div>
-            <div className="text-xl font-semibold">Rendering your video...</div>
-            <div className="text-center text-gray-600 max-w-md">
-              <div>Please wait while we process your video.</div>
-              <div>This may take a few minutes depending on the complexity.</div>
+            
+            {/* Status Text */}
+            <div className="text-xl font-semibold text-center">
+              {progress === 0 && "Preparing video render..."}
+              {progress > 0 && progress < 5 && "Starting FFmpeg process..."}
+              {progress >= 5 && progress < 95 && "Rendering your video..."}
+              {progress >= 95 && progress < 100 && "Finalizing video..."}
+              {progress === 100 && "Video ready!"}
             </div>
             
-            {/* Progress bar */}
-            <div className="w-full max-w-md bg-gray-200 rounded-full h-2">
-              <div 
-                className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                style={{ width: `${progress}%` }}
-              />
+            {/* Description */}
+            <div className="text-center text-gray-600 max-w-md">
+              <div>Please wait while we process your video.</div>
+              <div className="text-sm">
+                {progress === 0 && "Setting up render pipeline..."}
+                {progress > 0 && progress < 5 && "Initializing video encoding..."}
+                {progress >= 5 && progress < 95 && "This may take a few minutes depending on the complexity."}
+                {progress >= 95 && "Almost done! Adding finishing touches..."}
+              </div>
             </div>
+            
+            {/* Enhanced Progress Bar */}
+            <div className="w-full max-w-md">
+              <div className="bg-gray-200 rounded-full h-3 shadow-inner">
+                <div 
+                  className="bg-gradient-to-r from-blue-500 to-blue-600 h-3 rounded-full transition-all duration-500 ease-out shadow-sm"
+                  style={{ width: `${Math.max(progress, 1)}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-xs text-gray-500 mt-2">
+                <span>0%</span>
+                <span className="font-medium">{Math.floor(progress)}% Complete</span>
+                <span>100%</span>
+              </div>
+            </div>
+            
+            {/* Estimated Time (จะเพิ่มในอนาคต) */}
+            {progress > 5 && progress < 95 && (
+              <div className="text-sm text-gray-500">
+                🕒 Processing video frames...
+              </div>
+            )}
             
             <Button 
               variant="outline" 
               onClick={() => actions.setDisplayProgressModal(false)}
+              className="mt-4"
             >
               Hide Progress
             </Button>

@@ -135,7 +135,7 @@ export default function Navbar({
       </div>
 
       <div className="flex h-14 items-center justify-end gap-2">
-        <MediaManager />
+        {/* Added Export Video button back, but kept Media Library and Discord removed */}
         <div className="bg-sidebar pointer-events-auto flex h-12 items-center gap-2 rounded-md px-2.5">
           <Button
             className="flex h-8 gap-1 border border-border"
@@ -144,15 +144,6 @@ export default function Navbar({
             <ShareIcon width={18} /> Share
           </Button>
           <DownloadPopover stateManager={stateManager} />
-          <Button
-            className="flex h-8 gap-1 border border-border"
-            variant="default"
-            onClick={() => {
-              window.open("https://discord.gg/jrZs3wZyM5", "_blank");
-            }}
-          >
-            Discord
-          </Button>
         </div>
       </div>
     </div>
