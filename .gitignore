@@ -212,8 +212,18 @@ test-*.js
 debug-*.js
 *.test.js
 *.spec.js
+test-*.json
+*-test.js
+*-debug.js
 
-# Documentation and markdown files
+# Documentation and markdown files (exclude temporary/test docs)
+*-SUMMARY.md
+*-FIX*.md
+*-REPORT.md
+*-STATUS*.md
+*-SYSTEM.md
+*-CHECKLIST.md
+TEST-*.md
 *.md
 *.MD
 !README.md
