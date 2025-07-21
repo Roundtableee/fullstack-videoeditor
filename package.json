@@ -1,0 +1,51 @@
+{
+  "name": "render-with-copilot",
+  "version": "1.0.0",
+  "description": "AI-powered video editor with avatar rendering capabilities",
+  "private": true,
+  "workspaces": [
+    "video-render-backend",
+    "AI-avatar-frontend/react-video-editor-main"
+  ],
+  "scripts": {
+    "install:all": "npm install && npm install --prefix video-render-backend && npm install --prefix AI-avatar-frontend/react-video-editor-main",
+    "dev:backend": "cd video-render-backend && npm run dev",
+    "dev:frontend": "cd AI-avatar-frontend/react-video-editor-main && npm run dev",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "build:backend": "cd video-render-backend && npm run build",
+    "build:frontend": "cd AI-avatar-frontend/react-video-editor-main && npm run build",
+    "build": "npm run build:backend && npm run build:frontend",
+    "start:backend": "cd video-render-backend && npm start",
+    "start:frontend": "cd AI-avatar-frontend/react-video-editor-main && npm run preview",
+    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
+    "lint": "npm run lint --prefix video-render-backend && npm run lint --prefix AI-avatar-frontend/react-video-editor-main",
+    "test": "npm run test --prefix video-render-backend",
+    "clean": "rm -rf node_modules video-render-backend/node_modules AI-avatar-frontend/react-video-editor-main/node_modules",
+    "docker:build": "docker-compose build",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Roundtableee/fullstack-videoeditor.git"
+  },
+  "keywords": [
+    "video-editor",
+    "ai",
+    "avatar",
+    "react",
+    "typescript",
+    "nodejs",
+    "remotion",
+    "ffmpeg"
+  ],
+  "author": "BOTNOI",
+  "license": "MIT"
+}

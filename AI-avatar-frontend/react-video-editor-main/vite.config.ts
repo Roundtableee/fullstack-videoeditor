@@ -17,20 +17,20 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: process.env.VITE_BACKEND_URL || "http://localhost:3002",
+        target: process.env.VITE_BACKEND_URL || "http://localhost:3001",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
       "/upload": {
-        target: process.env.VITE_BACKEND_URL || "http://localhost:3002",
+        target: process.env.VITE_BACKEND_URL || "http://localhost:3001",
         changeOrigin: true,
       },
       "/uploads": {
-        target: process.env.VITE_BACKEND_URL || "http://localhost:3002",
+        target: process.env.VITE_BACKEND_URL || "http://localhost:3001",
         changeOrigin: true,
       },
       "/outputs": {
-        target: process.env.VITE_BACKEND_URL || "http://localhost:3002",
+        target: process.env.VITE_BACKEND_URL || "http://localhost:3001",
         changeOrigin: true,
       },
       "/audio": {

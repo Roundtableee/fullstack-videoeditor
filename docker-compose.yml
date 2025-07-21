@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  backend:
+    build: 
+      context: ./video-render-backend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - FRONTEND_URL=http://localhost:5173
+      - DEV_URL_1=http://localhost:5173
+      - DEV_URL_2=http://localhost:3000
+      - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+      - UPLOAD_DIR=/app/uploads
+      - OUTPUT_DIR=/app/outputs
+      - MAX_CONCURRENT_RENDERS=2
+      - RENDER_TIMEOUT=300000
+      - REMOTION_CONCURRENCY=1
+      - REMOTION_QUALITY=70
+      - REMOTION_CRF=18
+    volumes:
+      - ./video-render-backend/uploads:/app/uploads
+      - ./video-render-backend/outputs:/app/outputs
+      - ./video-render-backend/src:/app/src
+      - ./video-render-backend/tsconfig.json:/app/tsconfig.json
+      - ./video-render-backend/package.json:/app/package.json
+    working_dir: /app
+    command: npm run dev
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  frontend:
+    build: 
+      context: ./AI-avatar-frontend/react-video-editor-main
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_BACKEND_URL=http://localhost:3001
+      - VITE_PUBLIC_RENDER_API_URL=http://localhost:3001/render
+      - VITE_PUBLIC_STATUS_API_URL=http://localhost:3001/status
+      - VITE_PUBLIC_UPLOAD_API_URL=http://localhost:3001/upload
+    volumes:
+      - ./AI-avatar-frontend/react-video-editor-main/src:/app/src
+      - ./AI-avatar-frontend/react-video-editor-main/public:/app/public
+      - ./AI-avatar-frontend/react-video-editor-main/index.html:/app/index.html
+      - ./AI-avatar-frontend/react-video-editor-main/vite.config.ts:/app/vite.config.ts
+      - ./AI-avatar-frontend/react-video-editor-main/package.json:/app/package.json
+    working_dir: /app
+    command: npm run dev -- --host 0.0.0.0
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  uploads:
+  outputs:
